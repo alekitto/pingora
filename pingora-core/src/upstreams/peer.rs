@@ -16,6 +16,8 @@
 
 use crate::connectors::{l4::BindTo, L4Connect};
 use crate::protocols::l4::socket::SocketAddr;
+#[cfg(feature = "quic")]
+use crate::protocols::quic::MAX_DATAGRAM_SIZE;
 use crate::protocols::tls::CaType;
 #[cfg(unix)]
 use crate::protocols::ConnFdReusable;
@@ -215,6 +217,11 @@ pub trait Peer: Display + Clone {
             .upstream_tcp_sock_tweak_hook
             .as_ref()
     }
+
+    #[cfg(feature = "quic")]
+    fn quic_transport_options(&self) -> Option<&QuicTransportOptions> {
+        None
+    }
 }
 
 /// A simple TCP or TLS peer without many complicated settings.
@@ -283,6 +290,116 @@ impl Peer for BasicPeer {
 
     fn get_peer_options(&self) -> Option<&PeerOptions> {
         Some(&self.options)
+    }
+}
+
+#[cfg(feature = "quic")]
+#[derive(Debug, Clone, Default)]
+pub struct QuicTransportOptions {
+    pub server_name: Option<String>,
+    pub alpn_protocols: Vec<Vec<u8>>,
+    pub handshake_timeout: Option<Duration>,
+    pub idle_timeout: Option<Duration>,
+    pub source_connection_id: Option<Vec<u8>>,
+    pub original_destination_connection_id: Option<Vec<u8>>,
+    pub retry_source_connection_id: Option<Vec<u8>>,
+    pub zero_rtt_token: Option<Vec<u8>>,
+    pub max_datagram_size: Option<usize>,
+}
+
+#[cfg(feature = "quic")]
+impl QuicTransportOptions {
+    pub fn new() -> Self {
+        Self {
+            server_name: None,
+            alpn_protocols: Vec::new(),
+            handshake_timeout: None,
+            idle_timeout: None,
+            source_connection_id: None,
+            original_destination_connection_id: None,
+            retry_source_connection_id: None,
+            zero_rtt_token: None,
+            max_datagram_size: Some(MAX_DATAGRAM_SIZE),
+        }
+    }
+}
+
+#[cfg(feature = "quic")]
+#[derive(Debug, Clone)]
+pub struct QuicPeer {
+    pub address: SocketAddr,
+    pub sni: String,
+    pub options: PeerOptions,
+    pub quic: QuicTransportOptions,
+}
+
+#[cfg(feature = "quic")]
+impl QuicPeer {
+    pub fn new(address: &str) -> Result<Self> {
+        let address = SocketAddr::Inet(
+            address
+                .parse()
+                .or_err(InternalError, "failed to parse QUIC peer address")?,
+        );
+        Ok(Self {
+            address,
+            sni: String::new(),
+            options: PeerOptions::new(),
+            quic: QuicTransportOptions::new(),
+        })
+    }
+
+    pub fn set_sni(&mut self, sni: impl Into<String>) {
+        self.sni = sni.into();
+    }
+
+    pub fn set_quic_options(&mut self, options: QuicTransportOptions) {
+        self.quic = options;
+    }
+}
+
+#[cfg(feature = "quic")]
+impl Display for QuicPeer {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "QuicPeer({})", self.address)
+    }
+}
+
+#[cfg(feature = "quic")]
+impl Peer for QuicPeer {
+    fn address(&self) -> &SocketAddr {
+        &self.address
+    }
+
+    fn tls(&self) -> bool {
+        true
+    }
+
+    fn sni(&self) -> &str {
+        &self.sni
+    }
+
+    fn reuse_hash(&self) -> u64 {
+        let mut hasher = AHasher::default();
+        self.address.hash(&mut hasher);
+        self.sni.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn get_peer_options(&self) -> Option<&PeerOptions> {
+        Some(&self.options)
+    }
+
+    fn get_mut_peer_options(&mut self) -> Option<&mut PeerOptions> {
+        Some(&mut self.options)
+    }
+
+    fn get_tracer(&self) -> Option<Tracer> {
+        self.options.tracer.clone()
+    }
+
+    fn quic_transport_options(&self) -> Option<&QuicTransportOptions> {
+        Some(&self.quic)
     }
 }
 
