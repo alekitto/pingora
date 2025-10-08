@@ -695,7 +695,14 @@ mod test {
         sender.send_to(b"data", bound_addr).await.unwrap();
 
         // Ensure at least one of the sockets can receive traffic.
-        let _ = endpoint1.recv_datagram().await.unwrap();
+        tokio::select! {
+            res = endpoint1.recv_datagram() => {
+                res.unwrap();
+            }
+            res = endpoint2.recv_datagram() => {
+                res.unwrap();
+            }
+        }
         drop(endpoint2);
     }
 }
