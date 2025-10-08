@@ -14,6 +14,7 @@
 
 //! Transport layer protocol implementation
 
+pub mod datagram;
 pub mod ext;
 pub mod listener;
 pub mod socket;

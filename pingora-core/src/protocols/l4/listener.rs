@@ -19,17 +19,20 @@ use std::io;
 use std::os::unix::io::AsRawFd;
 #[cfg(windows)]
 use std::os::windows::io::AsRawSocket;
-use tokio::net::TcpListener;
+use std::sync::Arc;
 #[cfg(unix)]
 use tokio::net::UnixListener;
+use tokio::net::{TcpListener, UdpSocket};
 
 use crate::protocols::digest::{GetSocketDigest, SocketDigest};
+use crate::protocols::l4::datagram::Datagram;
 use crate::protocols::l4::stream::Stream;
 
 /// The type for generic listener for both TCP and Unix domain socket
 #[derive(Debug)]
 pub enum Listener {
     Tcp(TcpListener),
+    Udp(Arc<UdpSocket>),
     #[cfg(unix)]
     Unix(UnixListener),
 }
@@ -37,6 +40,12 @@ pub enum Listener {
 impl From<TcpListener> for Listener {
     fn from(s: TcpListener) -> Self {
         Self::Tcp(s)
+    }
+}
+
+impl From<UdpSocket> for Listener {
+    fn from(s: UdpSocket) -> Self {
+        Self::Udp(Arc::new(s))
     }
 }
 
@@ -52,6 +61,7 @@ impl AsRawFd for Listener {
     fn as_raw_fd(&self) -> std::os::unix::io::RawFd {
         match &self {
             Self::Tcp(l) => l.as_raw_fd(),
+            Self::Udp(l) => l.as_raw_fd(),
             Self::Unix(l) => l.as_raw_fd(),
         }
     }
@@ -62,6 +72,7 @@ impl AsRawSocket for Listener {
     fn as_raw_socket(&self) -> std::os::windows::io::RawSocket {
         match &self {
             Self::Tcp(l) => l.as_raw_socket(),
+            Self::Udp(l) => l.as_raw_socket(),
         }
     }
 }
@@ -100,6 +111,21 @@ impl Listener {
                 s.set_socket_digest(digest);
                 s
             }),
+            Self::Udp(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "accept() is not supported for UDP sockets",
+            )),
+        }
+    }
+
+    /// Receive a datagram from the UDP listener.
+    pub async fn recv_from(&self) -> io::Result<Datagram> {
+        match &self {
+            Self::Udp(socket) => Datagram::receive(socket).await,
+            _ => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "recv_from() is only available for UDP listeners",
+            )),
         }
     }
 }
