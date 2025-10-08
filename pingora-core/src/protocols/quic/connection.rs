@@ -60,6 +60,31 @@ impl Connection {
     pub fn timeout(&self) -> Option<Duration> {
         self.inner.timeout()
     }
+
+    /// Notify the connection that its timer has expired.
+    pub fn on_timeout(&mut self) {
+        self.inner.on_timeout();
+    }
+
+    /// Whether the connection has fully closed.
+    pub fn is_closed(&self) -> bool {
+        self.inner.is_closed()
+    }
+
+    /// Whether the connection is draining.
+    pub fn is_draining(&self) -> bool {
+        self.inner.is_draining()
+    }
+
+    /// Return the server-side connection identifier as owned bytes.
+    pub fn source_conn_id(&self) -> Vec<u8> {
+        self.inner.source_id().to_vec()
+    }
+
+    /// Return the peer connection identifier as owned bytes.
+    pub fn destination_conn_id(&self) -> Vec<u8> {
+        self.inner.destination_id().to_vec()
+    }
 }
 
 #[async_trait]

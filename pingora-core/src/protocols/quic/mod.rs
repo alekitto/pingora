@@ -9,5 +9,7 @@ pub use config::{
     ClientConfig, ConfigError, ServerConfig, TransportConfig, TransportConfigBuilder,
 };
 pub use connection::Connection;
-pub use datagram::{Datagram, DatagramParts, DatagramPayload, SendDatagram, SendDatagramParts};
+pub use datagram::{
+    Datagram, DatagramParts, DatagramPayload, SendDatagram, SendDatagramParts, MAX_DATAGRAM_SIZE,
+};
 pub use endpoint::Endpoint;

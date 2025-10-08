@@ -47,6 +47,25 @@ impl Endpoint {
         })
     }
 
+    /// Wrap an existing UDP socket stored in an [`Arc`].
+    pub fn from_arc(socket: Arc<UdpSocket>) -> std::io::Result<Self> {
+        let local_addr = socket.local_addr()?;
+
+        #[cfg(unix)]
+        let digest = SocketDigest::from_raw_fd(socket.as_raw_fd());
+        #[cfg(windows)]
+        let digest = SocketDigest::from_raw_socket(socket.as_raw_socket());
+
+        let _ = digest.local_addr.set(Some(SocketAddr::Inet(local_addr)));
+
+        Ok(Self {
+            socket,
+            socket_digest: Arc::new(digest),
+            proxy_digest: None,
+            created: SystemTime::now(),
+        })
+    }
+
     /// Returns a clone of the inner socket for advanced usage.
     pub fn socket(&self) -> Arc<UdpSocket> {
         Arc::clone(&self.socket)
