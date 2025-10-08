@@ -107,13 +107,24 @@ impl QuicConnector {
 
         let options = self.quic_options(peer);
 
-        let scid_bytes = options
-            .and_then(|opt| opt.source_connection_id.clone())
-            .unwrap_or_else(|| {
+        let scid_bytes = match options.and_then(|opt| opt.source_connection_id.clone()) {
+            Some(scid) if scid.len() <= quiche::MAX_CONN_ID_LEN => scid,
+            Some(scid) => {
+                return Err(Error::new(
+                    InternalError,
+                    format!(
+                        "QUIC source connection id length {} exceeds maximum {}",
+                        scid.len(),
+                        quiche::MAX_CONN_ID_LEN
+                    ),
+                ));
+            }
+            None => {
                 let mut random = [0u8; quiche::MAX_CONN_ID_LEN];
                 OsRng.fill_bytes(&mut random);
                 random.to_vec()
-            });
+            }
+        };
 
         let scid = quiche::ConnectionId::from_ref(&scid_bytes);
 
