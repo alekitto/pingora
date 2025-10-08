@@ -75,6 +75,10 @@ pub struct Bucket {
     // The weight associated with a node. A higher weight indicates that this node should
     // receive more requests.
     weight: u32,
+
+    // Custom hash key for the node allowing callers to disambiguate identical socket
+    // addresses by other metadata.
+    hash_key: Vec<u8>,
 }
 
 impl Bucket {
@@ -88,7 +92,38 @@ impl Bucket {
     pub fn new(node: SocketAddr, weight: u32) -> Self {
         assert!(weight != 0, "weight must be at least one");
 
-        Bucket { node, weight }
+        Bucket {
+            hash_key: Self::default_hash_key(&node),
+            node,
+            weight,
+        }
+    }
+
+    /// Return a new bucket with a caller supplied hash key.
+    ///
+    /// The supplied key is fed directly into the continuum hashing algorithm, allowing
+    /// callers to include additional metadata (e.g. transport protocol) when generating
+    /// the ring.
+    ///
+    /// # Panics
+    ///
+    /// This will panic if the weight is zero.
+    pub fn with_hash_key(node: SocketAddr, weight: u32, hash_key: Vec<u8>) -> Self {
+        assert!(weight != 0, "weight must be at least one");
+
+        Bucket {
+            hash_key,
+            node,
+            weight,
+        }
+    }
+
+    fn default_hash_key(node: &SocketAddr) -> Vec<u8> {
+        let mut hash_bytes = Vec::with_capacity(39 + 1 + 5);
+        write!(&mut hash_bytes, "{}", node.ip()).unwrap();
+        write!(&mut hash_bytes, "\0").unwrap();
+        write!(&mut hash_bytes, "{}", node.port()).unwrap();
+        hash_bytes
     }
 }
 
@@ -149,20 +184,7 @@ impl Continuum {
 
         for bucket in buckets {
             let mut hasher = Hasher::new();
-
-            // We only do the following for backwards compatibility with nginx/memcache:
-            // - Convert SocketAddr to string
-            // - The hash input is as follows "HOST EMPTY PORT PREVIOUS_HASH". Spaces are only added
-            //   for readability.
-            // TODO: remove this logic and hash the literal SocketAddr once we no longer
-            // need backwards compatibility
-
-            // with_capacity = max_len(ipv6)(39) + len(null)(1) + max_len(port)(5)
-            let mut hash_bytes = Vec::with_capacity(39 + 1 + 5);
-            write!(&mut hash_bytes, "{}", bucket.node.ip()).unwrap();
-            write!(&mut hash_bytes, "\0").unwrap();
-            write!(&mut hash_bytes, "{}", bucket.node.port()).unwrap();
-            hasher.update(hash_bytes.as_ref());
+            hasher.update(bucket.hash_key.as_ref());
 
             // A higher weight will add more points for this node.
             let num_points = bucket.weight * POINT_MULTIPLE;
@@ -221,7 +243,7 @@ impl Continuum {
     ///
     /// This function is useful to find failover servers if the original ones are offline, which is
     /// cheaper than rebuilding the entire hash ring.
-    pub fn node_iter(&self, hash_key: &[u8]) -> NodeIterator {
+    pub fn node_iter(&self, hash_key: &[u8]) -> NodeIterator<'_> {
         NodeIterator {
             idx: self.node_idx(hash_key),
             continuum: self,
@@ -229,12 +251,20 @@ impl Continuum {
     }
 
     pub fn get_addr(&self, idx: &mut usize) -> Option<&SocketAddr> {
+        self.get_point(idx).map(|(_, addr)| addr)
+    }
+
+    /// Return the continuum index and socket address for the point at `idx`.
+    pub fn get_point(&self, idx: &mut usize) -> Option<(usize, &SocketAddr)> {
         let point = self.ring.get(*idx);
-        if point.is_some() {
+        if let Some(point) = point {
             // only update idx for non-empty ring otherwise we will panic on modulo 0
             *idx = (*idx + 1) % self.ring.len();
+            let node = point.node as usize;
+            Some((node, &self.addrs[node]))
+        } else {
+            None
         }
-        point.map(|p| &self.addrs[p.node as usize])
     }
 }
 

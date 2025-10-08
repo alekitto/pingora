@@ -263,7 +263,7 @@ impl Backends {
             Some(check) if !check.supports_protocol(backend.protocol) => {
                 entry.map_or(true, |h| h.ready())
             }
-            Some(_) => entry.map_or(false, |h| h.ready()),
+            Some(_) => entry.is_some_and(|h| h.ready()),
             None => entry.map_or(true, |h| h.ready()),
         }
     }
@@ -711,9 +711,11 @@ mod test {
         let udp_backend = Backend::from_std_socket(udp_addr, 1, BackendProtocol::Udp);
         discovery.add(udp_backend.clone());
 
-        let mut udp_check = UdpHealthCheck::default();
-        udp_check.payload = b"ping".to_vec();
-        udp_check.expected_response = Some(b"pong".to_vec());
+        let udp_check = UdpHealthCheck {
+            payload: b"ping".to_vec(),
+            expected_response: Some(b"pong".to_vec()),
+            ..Default::default()
+        };
 
         let mut backends = Backends::new(Box::new(discovery));
         backends.set_health_check(Box::new(udp_check));

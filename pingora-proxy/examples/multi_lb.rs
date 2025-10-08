@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use pingora_core::{prelude::*, services::background::GenBackgroundService};
+use pingora_load_balancing::discovery::IntoStaticBackends;
 use pingora_load_balancing::{
     health_check::TcpHealthCheck,
     selection::{BackendIter, BackendSelection, RoundRobin},
@@ -53,7 +54,9 @@ impl ProxyHttp for Router {
     }
 }
 
-fn build_cluster_service<S>(upstreams: &[&str]) -> GenBackgroundService<LoadBalancer<S>>
+fn build_cluster_service<S, A: IntoStaticBackends, T: IntoIterator<Item = A>>(
+    upstreams: T,
+) -> GenBackgroundService<LoadBalancer<S>>
 where
     S: BackendSelection + 'static,
     S::Iter: BackendIter,
@@ -73,8 +76,8 @@ fn main() {
     my_server.bootstrap();
 
     // build multiple clusters
-    let cluster_one = build_cluster_service::<RoundRobin>(&["1.1.1.1:443", "127.0.0.1:343"]);
-    let cluster_two = build_cluster_service::<RoundRobin>(&["1.0.0.1:443", "127.0.0.2:343"]);
+    let cluster_one = build_cluster_service::<RoundRobin, _, _>(["1.1.1.1:443", "127.0.0.1:343"]);
+    let cluster_two = build_cluster_service::<RoundRobin, _, _>(["1.0.0.1:443", "127.0.0.2:343"]);
 
     let router = Router {
         cluster_one: cluster_one.task(),

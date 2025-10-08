@@ -18,36 +18,41 @@ use super::*;
 use crate::BackendProtocol;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_ketama::{Bucket, Continuum};
-use std::collections::HashMap;
+use std::collections::HashSet;
+use std::io::Write;
 
 /// Weighted Ketama consistent hashing
 pub struct KetamaHashing {
     ring: Continuum,
-    // TODO: update Ketama to just store this
-    backends: HashMap<SocketAddr, Backend>,
+    backends: Vec<Backend>,
 }
 
 impl BackendSelection for KetamaHashing {
     type Iter = OwnedNodeIterator;
 
     fn build(backends: &BTreeSet<Backend>) -> Self {
-        let buckets: Vec<_> = backends
-            .iter()
-            .filter(|b| b.protocol == BackendProtocol::Tcp)
-            .filter_map(|b| {
-                // FIXME: ketama only supports Inet addr, UDS addrs are ignored here
-                if let SocketAddr::Inet(addr) = b.addr {
-                    Some(Bucket::new(addr, b.weight as u32))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        let new_backends = backends
-            .iter()
-            .filter(|b| b.protocol == BackendProtocol::Tcp)
-            .map(|b| (b.addr.clone(), b.clone()))
-            .collect();
+        let mut buckets = Vec::new();
+        let mut new_backends = Vec::new();
+
+        for backend in backends {
+            // FIXME: ketama only supports Inet addr, UDS addrs are ignored here
+            if let SocketAddr::Inet(addr) = backend.addr {
+                let mut hash_key = Vec::with_capacity(3 + 1 + 39 + 1 + 5);
+                let tag = match backend.protocol {
+                    BackendProtocol::Tcp => b"tcp".as_slice(),
+                    BackendProtocol::Udp => b"udp".as_slice(),
+                };
+                hash_key.extend_from_slice(tag);
+                hash_key.push(0);
+                write!(&mut hash_key, "{}", addr.ip()).unwrap();
+                hash_key.push(0);
+                write!(&mut hash_key, "{}", addr.port()).unwrap();
+
+                buckets.push(Bucket::with_hash_key(addr, backend.weight as u32, hash_key));
+                new_backends.push(backend.clone());
+            }
+        }
+
         KetamaHashing {
             ring: Continuum::new(&buckets),
             backends: new_backends,
@@ -58,6 +63,7 @@ impl BackendSelection for KetamaHashing {
         OwnedNodeIterator {
             idx: self.ring.node_idx(key),
             ring: self.clone(),
+            seen: HashSet::new(),
         }
     }
 }
@@ -66,14 +72,19 @@ impl BackendSelection for KetamaHashing {
 pub struct OwnedNodeIterator {
     idx: usize,
     ring: Arc<KetamaHashing>,
+    seen: HashSet<usize>,
 }
 
 impl BackendIter for OwnedNodeIterator {
     fn next(&mut self) -> Option<&Backend> {
-        self.ring.ring.get_addr(&mut self.idx).and_then(|addr| {
-            let addr = SocketAddr::Inet(*addr);
-            self.ring.backends.get(&addr)
-        })
+        while let Some((node_idx, _addr)) = self.ring.ring.get_point(&mut self.idx) {
+            if self.seen.insert(node_idx) {
+                if let Some(backend) = self.ring.backends.get(node_idx) {
+                    return Some(backend);
+                }
+            }
+        }
+        None
     }
 }
 
@@ -90,31 +101,31 @@ mod test {
         let hash = Arc::new(KetamaHashing::build(&backends));
 
         let mut iter = hash.iter(b"test0");
-        assert_eq!(iter.next(), Some(&b2));
+        assert_eq!(iter.next(), Some(&b3));
         let mut iter = hash.iter(b"test1");
-        assert_eq!(iter.next(), Some(&b1));
+        assert_eq!(iter.next(), Some(&b3));
         let mut iter = hash.iter(b"test2");
         assert_eq!(iter.next(), Some(&b1));
         let mut iter = hash.iter(b"test3");
         assert_eq!(iter.next(), Some(&b1));
         let mut iter = hash.iter(b"test4");
-        assert_eq!(iter.next(), Some(&b1));
+        assert_eq!(iter.next(), Some(&b2));
         let mut iter = hash.iter(b"test5");
-        assert_eq!(iter.next(), Some(&b3));
+        assert_eq!(iter.next(), Some(&b1));
         let mut iter = hash.iter(b"test6");
         assert_eq!(iter.next(), Some(&b1));
         let mut iter = hash.iter(b"test7");
-        assert_eq!(iter.next(), Some(&b3));
-        let mut iter = hash.iter(b"test8");
         assert_eq!(iter.next(), Some(&b1));
-        let mut iter = hash.iter(b"test9");
+        let mut iter = hash.iter(b"test8");
         assert_eq!(iter.next(), Some(&b2));
+        let mut iter = hash.iter(b"test9");
+        assert_eq!(iter.next(), Some(&b1));
 
         // remove b3
         let backends = BTreeSet::from_iter([b1.clone(), b2.clone()]);
         let hash = Arc::new(KetamaHashing::build(&backends));
         let mut iter = hash.iter(b"test0");
-        assert_eq!(iter.next(), Some(&b2));
+        assert_eq!(iter.next(), Some(&b1));
         let mut iter = hash.iter(b"test1");
         assert_eq!(iter.next(), Some(&b1));
         let mut iter = hash.iter(b"test2");
@@ -122,16 +133,45 @@ mod test {
         let mut iter = hash.iter(b"test3");
         assert_eq!(iter.next(), Some(&b1));
         let mut iter = hash.iter(b"test4");
-        assert_eq!(iter.next(), Some(&b1));
+        assert_eq!(iter.next(), Some(&b2));
         let mut iter = hash.iter(b"test5");
-        assert_eq!(iter.next(), Some(&b2)); // changed
+        assert_eq!(iter.next(), Some(&b1));
         let mut iter = hash.iter(b"test6");
         assert_eq!(iter.next(), Some(&b1));
         let mut iter = hash.iter(b"test7");
-        assert_eq!(iter.next(), Some(&b1)); // changed
-        let mut iter = hash.iter(b"test8");
         assert_eq!(iter.next(), Some(&b1));
-        let mut iter = hash.iter(b"test9");
+        let mut iter = hash.iter(b"test8");
         assert_eq!(iter.next(), Some(&b2));
+        let mut iter = hash.iter(b"test9");
+        assert_eq!(iter.next(), Some(&b1));
+    }
+
+    #[test]
+    fn test_ketama_includes_protocol() {
+        use std::collections::HashSet;
+
+        let tcp = Backend::new("10.0.0.1:443").unwrap();
+        let udp_addr = "10.0.0.1:443".parse().unwrap();
+        let udp = Backend::from_std_socket(udp_addr, 1, BackendProtocol::Udp);
+
+        let backends = BTreeSet::from_iter([tcp.clone(), udp.clone()]);
+        let hash = Arc::new(KetamaHashing::build(&backends));
+
+        let mut iter = hash.iter(b"shared");
+        let mut seen = HashSet::new();
+
+        for _ in 0..4 {
+            if let Some(backend) = iter.next() {
+                seen.insert(backend.protocol);
+                if seen.len() == 2 {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        assert!(seen.contains(&BackendProtocol::Tcp));
+        assert!(seen.contains(&BackendProtocol::Udp));
     }
 }

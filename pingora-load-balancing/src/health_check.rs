@@ -643,9 +643,11 @@ mod test {
             }
         });
 
-        let mut udp_check = UdpHealthCheck::default();
-        udp_check.payload = b"ping".to_vec();
-        udp_check.expected_response = Some(b"pong".to_vec());
+        let udp_check = UdpHealthCheck {
+            payload: b"ping".to_vec(),
+            expected_response: Some(b"pong".to_vec()),
+            ..Default::default()
+        };
 
         let backend = Backend::from_std_socket(addr, 1, BackendProtocol::Udp);
         udp_check.check(&backend).await.unwrap();
