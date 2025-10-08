@@ -161,6 +161,10 @@ impl IntoStaticBackends for &str {
             return parse_host_with_protocol(udp, BackendProtocol::Udp);
         }
 
+        if let Some(quic) = self.strip_prefix("quic://") {
+            return parse_host_with_protocol(quic, BackendProtocol::Quic);
+        }
+
         let host = self.strip_prefix("tcp://").unwrap_or(self);
         parse_host_with_protocol(host, BackendProtocol::Tcp)
     }
@@ -195,6 +199,13 @@ impl IntoStaticBackends for (&str, BackendProtocol) {
                     parse_host_with_protocol(host, BackendProtocol::Udp)
                 } else {
                     parse_host_with_protocol(self.0, BackendProtocol::Udp)
+                }
+            }
+            BackendProtocol::Quic => {
+                if let Some(host) = self.0.strip_prefix("quic://") {
+                    parse_host_with_protocol(host, BackendProtocol::Quic)
+                } else {
+                    parse_host_with_protocol(self.0, BackendProtocol::Quic)
                 }
             }
         }

@@ -46,7 +46,7 @@ use selection::{BackendIter, BackendSelection};
 pub mod prelude {
     pub use crate::health_check::{TcpHealthCheck, UdpHealthCheck};
     pub use crate::selection::RoundRobin;
-    pub use crate::LoadBalancer;
+    pub use crate::{BackendProtocol, LoadBalancer};
 }
 
 /// Supported protocols for a backend endpoint.
@@ -54,6 +54,7 @@ pub mod prelude {
 pub enum BackendProtocol {
     Tcp,
     Udp,
+    Quic,
 }
 
 /// [Backend] represents a server to proxy or connect to.
@@ -95,6 +96,10 @@ impl Backend {
             return Self::new_udp_with_weight(udp_addr, weight);
         }
 
+        if let Some(quic_addr) = addr.strip_prefix("quic://") {
+            return Self::new_quic_with_weight(quic_addr, weight);
+        }
+
         let addr = addr
             .strip_prefix("tcp://")
             .unwrap_or(addr)
@@ -116,6 +121,19 @@ impl Backend {
             .parse()
             .or_err(ErrorType::InternalError, "invalid socket addr")?;
         Ok(Self::from_std_socket(addr, weight, BackendProtocol::Udp))
+    }
+
+    /// Create a new QUIC [Backend] with `weight` 1.
+    pub fn new_quic(addr: &str) -> Result<Self> {
+        Self::new_quic_with_weight(addr, 1)
+    }
+
+    /// Create a new QUIC [Backend] with a custom weight.
+    pub fn new_quic_with_weight(addr: &str, weight: usize) -> Result<Self> {
+        let addr = addr
+            .parse()
+            .or_err(ErrorType::InternalError, "invalid socket addr")?;
+        Ok(Self::from_std_socket(addr, weight, BackendProtocol::Quic))
     }
 
     /// Create a [Backend] from a standard socket address with protocol metadata.
@@ -312,6 +330,18 @@ impl Backends {
             check: &Arc<dyn HealthCheck + Send + Sync>,
             health_table: &HashMap<u64, Health>,
         ) {
+            if let Err(err) = check.validate_backend(backend) {
+                warn!(
+                    "health check skipped for backend {}: {err}",
+                    check.backend_summary(backend)
+                );
+                return;
+            }
+
+            if !check.supports_protocol(backend.protocol) {
+                return;
+            }
+
             let errored = check.check(backend).await.err();
             if let Some(h) = health_table.get(&backend.hash_key()) {
                 let flipped =
@@ -341,18 +371,14 @@ impl Backends {
                 let check = health_check.clone();
                 let ht = health_table.clone();
                 runtime.spawn(async move {
-                    if check.supports_protocol(backend.protocol) {
-                        check_and_report(&backend, &check, &ht).await;
-                    }
+                    check_and_report(&backend, &check, &ht).await;
                 })
             });
 
             futures::future::join_all(jobs).await;
         } else {
             for backend in backends.iter() {
-                if health_check.supports_protocol(backend.protocol) {
-                    check_and_report(backend, health_check, &self.health.load()).await;
-                }
+                check_and_report(backend, health_check, &self.health.load()).await;
             }
         }
     }
@@ -461,6 +487,13 @@ where
         protocol: BackendProtocol,
     ) -> Option<Backend> {
         self.select_with_protocol(key, max_iterations, protocol, |_, health| health)
+    }
+
+    /// Convenience method to select a QUIC backend.
+    pub fn select_quic(&self, key: &[u8], max_iterations: usize) -> Option<Backend> {
+        self.select_with_protocol(key, max_iterations, BackendProtocol::Quic, |_, health| {
+            health
+        })
     }
 
     /// Similar to [Self::select_with] but restricts the backend protocol considered.
@@ -744,6 +777,25 @@ mod test {
 
         let selected_tcp = lb.select(b"tcp", 10).expect("tcp backend present");
         assert_eq!(selected_tcp.protocol, BackendProtocol::Tcp);
+    }
+
+    #[tokio::test]
+    async fn test_quic_selection() {
+        let discovery = discovery::Static::default();
+        let tcp_backend = Backend::new("127.0.0.1:8080").unwrap();
+        discovery.add(tcp_backend.clone());
+
+        let quic_backend = Backend::new_quic("127.0.0.1:8443").unwrap();
+        discovery.add(quic_backend.clone());
+
+        let backends = Backends::new(Box::new(discovery));
+        backends.update(|_| {}).await.unwrap();
+
+        assert!(backends.ready(&quic_backend));
+
+        let lb = LoadBalancer::<selection::RoundRobin>::from_backends(backends);
+        let selected_quic = lb.select_quic(b"quic", 10).expect("quic backend present");
+        assert_eq!(selected_quic.protocol, BackendProtocol::Quic);
     }
 
     mod thread_safety {

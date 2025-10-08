@@ -53,6 +53,23 @@ pub trait HealthCheck {
         matches!(protocol, BackendProtocol::Tcp)
     }
 
+    /// Validate that the backend can be probed by this health check.
+    ///
+    /// By default, QUIC backends are rejected because no built-in health
+    /// checks support QUIC probing yet.
+    fn validate_backend(&self, backend: &Backend) -> Result<()> {
+        if matches!(backend.protocol, BackendProtocol::Quic)
+            && !self.supports_protocol(BackendProtocol::Quic)
+        {
+            return Error::e_explain(
+                ErrorType::Custom("quic_health_check_unavailable"),
+                "health check does not support QUIC backends",
+            );
+        }
+
+        Ok(())
+    }
+
     /// Called when the health changes for a [Backend].
     async fn health_status_change(&self, _target: &Backend, _healthy: bool) {}
 
