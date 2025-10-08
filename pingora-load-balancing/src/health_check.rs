@@ -14,15 +14,18 @@
 
 //! Health Check interface and methods.
 
-use crate::Backend;
+use crate::{Backend, BackendProtocol};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use pingora_core::connectors::{http::Connector as HttpConnector, TransportConnector};
 use pingora_core::upstreams::peer::{BasicPeer, HttpPeer, Peer};
-use pingora_error::{Error, ErrorType::CustomCode, Result};
+use pingora_error::{Error, ErrorType, ErrorType::CustomCode, Result};
 use pingora_http::{RequestHeader, ResponseHeader};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr as StdSocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::net::UdpSocket;
+use tokio::time::timeout;
 
 /// [HealthObserve] is an interface for observing health changes of backends,
 /// this is what's used for our health observation callback.
@@ -44,6 +47,11 @@ pub trait HealthCheck {
     ///
     /// `Ok(())`` if the check passes, otherwise the check fails.
     async fn check(&self, target: &Backend) -> Result<()>;
+
+    /// Whether this health check supports the given backend protocol.
+    fn supports_protocol(&self, protocol: BackendProtocol) -> bool {
+        matches!(protocol, BackendProtocol::Tcp)
+    }
 
     /// Called when the health changes for a [Backend].
     async fn health_status_change(&self, _target: &Backend, _healthy: bool) {}
@@ -136,10 +144,166 @@ impl HealthCheck for TcpHealthCheck {
         self.connector.get_stream(&peer).await.map(|_| {})
     }
 
+    fn supports_protocol(&self, protocol: BackendProtocol) -> bool {
+        matches!(protocol, BackendProtocol::Tcp)
+    }
+
     async fn health_status_change(&self, target: &Backend, healthy: bool) {
         if let Some(callback) = &self.health_changed_callback {
             callback.observe(target, healthy).await;
         }
+    }
+}
+
+type UdpValidator = Box<dyn Fn(&[u8]) -> Result<()> + Send + Sync>;
+
+/// UDP health check
+///
+/// Sends a UDP datagram to a backend and optionally validates the response.
+pub struct UdpHealthCheck {
+    /// Number of successful checks to flip from unhealthy to healthy.
+    pub consecutive_success: usize,
+    /// Number of failed checks to flip from healthy to unhealthy.
+    pub consecutive_failure: usize,
+    /// Payload sent as part of the probe.
+    pub payload: Vec<u8>,
+    /// Optional payload expected in response. When set the received datagram must match.
+    pub expected_response: Option<Vec<u8>>,
+    /// Optional validator invoked with the received payload.
+    pub validator: Option<UdpValidator>,
+    /// Optional socket address to bind the probe socket.
+    pub bind_addr: Option<StdSocketAddr>,
+    /// Timeout for the overall health check operation.
+    pub timeout: Duration,
+    /// Maximum number of bytes read from the response datagram.
+    pub max_response_size: usize,
+    /// A callback that is invoked when the `healthy` status changes for a [Backend].
+    pub health_changed_callback: Option<HealthObserveCallback>,
+}
+
+impl Default for UdpHealthCheck {
+    fn default() -> Self {
+        UdpHealthCheck {
+            consecutive_success: 1,
+            consecutive_failure: 1,
+            payload: Vec::new(),
+            expected_response: None,
+            validator: None,
+            bind_addr: None,
+            timeout: Duration::from_secs(1),
+            max_response_size: 1500,
+            health_changed_callback: None,
+        }
+    }
+}
+
+impl UdpHealthCheck {
+    /// Create a new [`UdpHealthCheck`] with default configuration.
+    pub fn new() -> Box<Self> {
+        Box::<UdpHealthCheck>::default()
+    }
+
+    fn default_bind(addr: &StdSocketAddr) -> StdSocketAddr {
+        match addr {
+            StdSocketAddr::V4(_) => StdSocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+            StdSocketAddr::V6(_) => StdSocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+        }
+    }
+}
+
+#[async_trait]
+impl HealthCheck for UdpHealthCheck {
+    fn health_threshold(&self, success: bool) -> usize {
+        if success {
+            self.consecutive_success
+        } else {
+            self.consecutive_failure
+        }
+    }
+
+    async fn check(&self, target: &Backend) -> Result<()> {
+        if !matches!(target.protocol, BackendProtocol::Udp) {
+            return Error::e_explain(
+                ErrorType::InternalError,
+                "UDP health check requires UDP backend",
+            );
+        }
+
+        let addr =
+            target.addr.as_inet().cloned().ok_or_else(|| {
+                Error::explain(ErrorType::InternalError, "UDP backend must be inet")
+            })?;
+
+        let bind_addr = self.bind_addr.unwrap_or_else(|| Self::default_bind(&addr));
+        let payload_required = !self.payload.is_empty()
+            || self.expected_response.is_some()
+            || self.validator.is_some();
+        let payload = if payload_required {
+            self.payload.as_slice()
+        } else {
+            &[]
+        };
+        let max_response = self.max_response_size.max(1);
+        let expected = self.expected_response.as_ref();
+        let validator = self.validator.as_ref();
+
+        let probe = async {
+            let socket = UdpSocket::bind(bind_addr)
+                .await
+                .map_err(|e| Error::because(ErrorType::BindError, "udp health check bind", e))?;
+            socket.connect(addr).await.map_err(|e| {
+                Error::because(ErrorType::SocketError, "udp health check connect", e)
+            })?;
+
+            if payload_required {
+                socket.send(payload).await.map_err(|e| {
+                    Error::because(ErrorType::SocketError, "udp health check send", e)
+                })?;
+            }
+
+            if expected.is_some() || validator.is_some() {
+                let mut buf = vec![0u8; max_response];
+                let received = socket.recv(&mut buf).await.map_err(|e| {
+                    Error::because(ErrorType::SocketError, "udp health check recv", e)
+                })?;
+                buf.truncate(received);
+
+                if let Some(expected) = expected {
+                    if &buf != expected {
+                        return Error::e_explain(
+                            ErrorType::InternalError,
+                            "udp health check unexpected response",
+                        );
+                    }
+                }
+
+                if let Some(validator) = validator {
+                    validator(&buf)?;
+                }
+            }
+
+            Ok(())
+        };
+
+        timeout(self.timeout, probe).await.map_err(|_| {
+            Error::explain(ErrorType::ConnectTimedout, "udp health check timeout")
+        })??;
+
+        Ok(())
+    }
+
+    async fn health_status_change(&self, target: &Backend, healthy: bool) {
+        if let Some(callback) = &self.health_changed_callback {
+            callback.observe(target, healthy).await;
+        }
+    }
+
+    fn backend_summary(&self, target: &Backend) -> String {
+        format!("UDP backend {target:?}")
+    }
+
+    fn supports_protocol(&self, protocol: BackendProtocol) -> bool {
+        matches!(protocol, BackendProtocol::Udp)
     }
 }
 
@@ -292,6 +456,9 @@ impl HealthCheck for HttpHealthCheck {
             format!("{target:?}")
         }
     }
+    fn supports_protocol(&self, protocol: BackendProtocol) -> bool {
+        matches!(protocol, BackendProtocol::Tcp)
+    }
 }
 
 #[derive(Clone)]
@@ -376,27 +543,33 @@ mod test {
     };
 
     use super::*;
-    use crate::{discovery, Backends, SocketAddr};
+    use crate::{discovery, BackendProtocol, Backends};
     use async_trait::async_trait;
-    use http::Extensions;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     #[tokio::test]
     async fn test_tcp_check() {
         let tcp_check = TcpHealthCheck::default();
 
-        let backend = Backend {
-            addr: SocketAddr::Inet("1.1.1.1:80".parse().unwrap()),
-            weight: 1,
-            ext: Extensions::new(),
-        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let accept = tokio::spawn(async move {
+            let _ = listener.accept().await;
+        });
+
+        let backend = Backend::from_std_socket(addr, 1, BackendProtocol::Tcp);
 
         assert!(tcp_check.check(&backend).await.is_ok());
+        accept.await.unwrap();
 
-        let backend = Backend {
-            addr: SocketAddr::Inet("1.1.1.1:79".parse().unwrap()),
-            weight: 1,
-            ext: Extensions::new(),
+        let unused_addr = {
+            let tmp = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = tmp.local_addr().unwrap();
+            drop(tmp);
+            addr
         };
+        let backend = Backend::from_std_socket(unused_addr, 1, BackendProtocol::Tcp);
 
         assert!(tcp_check.check(&backend).await.is_err());
     }
@@ -405,11 +578,8 @@ mod test {
     #[tokio::test]
     async fn test_tls_check() {
         let tls_check = TcpHealthCheck::new_tls("one.one.one.one");
-        let backend = Backend {
-            addr: SocketAddr::Inet("1.1.1.1:443".parse().unwrap()),
-            weight: 1,
-            ext: Extensions::new(),
-        };
+        let backend =
+            Backend::from_std_socket("1.1.1.1:443".parse().unwrap(), 1, BackendProtocol::Tcp);
 
         assert!(tls_check.check(&backend).await.is_ok());
     }
@@ -419,18 +589,15 @@ mod test {
     async fn test_https_check() {
         let https_check = HttpHealthCheck::new("one.one.one.one", true);
 
-        let backend = Backend {
-            addr: SocketAddr::Inet("1.1.1.1:443".parse().unwrap()),
-            weight: 1,
-            ext: Extensions::new(),
-        };
+        let backend =
+            Backend::from_std_socket("1.1.1.1:443".parse().unwrap(), 1, BackendProtocol::Tcp);
 
         assert!(https_check.check(&backend).await.is_ok());
     }
 
     #[tokio::test]
     async fn test_http_custom_check() {
-        let mut http_check = HttpHealthCheck::new("one.one.one.one", false);
+        let mut http_check = HttpHealthCheck::new("localhost", false);
         http_check.validator = Some(Box::new(|resp: &ResponseHeader| {
             if resp.status == 301 {
                 Ok(())
@@ -441,16 +608,48 @@ mod test {
                 )
             }
         }));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 512];
+                let _ = stream.read(&mut buf).await.unwrap();
+                stream
+                    .write_all(b"HTTP/1.1 301 Moved Permanently\r\nContent-Length: 0\r\n\r\n")
+                    .await
+                    .unwrap();
+            }
+        });
 
-        let backend = Backend {
-            addr: SocketAddr::Inet("1.1.1.1:80".parse().unwrap()),
-            weight: 1,
-            ext: Extensions::new(),
-        };
+        let backend = Backend::from_std_socket(addr, 1, BackendProtocol::Tcp);
 
         http_check.check(&backend).await.unwrap();
 
         assert!(http_check.check(&backend).await.is_ok());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_udp_check() {
+        let responder = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let addr = responder.local_addr().unwrap();
+        let response = b"pong".to_vec();
+        let handle = tokio::spawn(async move {
+            let mut buf = [0u8; 32];
+            let (len, peer) = responder.recv_from(&mut buf).await.unwrap();
+            if &buf[..len] == b"ping" {
+                responder.send_to(&response, peer).await.unwrap();
+            }
+        });
+
+        let mut udp_check = UdpHealthCheck::default();
+        udp_check.payload = b"ping".to_vec();
+        udp_check.expected_response = Some(b"pong".to_vec());
+
+        let backend = Backend::from_std_socket(addr, 1, BackendProtocol::Udp);
+        udp_check.check(&backend).await.unwrap();
+        handle.await.unwrap();
     }
 
     #[tokio::test]

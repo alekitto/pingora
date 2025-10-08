@@ -16,7 +16,6 @@
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
-use http::Extensions;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_error::Result;
 use std::io::Result as IoResult;
@@ -26,7 +25,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::Backend;
+use crate::{Backend, BackendProtocol};
 
 /// [ServiceDiscovery] is the interface to discover [Backend]s.
 #[async_trait]
@@ -56,16 +55,11 @@ impl Static {
     /// Create a new boxed [Static] from a given iterator of items that implements [ToSocketAddrs].
     pub fn try_from_iter<A, T: IntoIterator<Item = A>>(iter: T) -> IoResult<Box<Self>>
     where
-        A: ToSocketAddrs,
+        A: IntoStaticBackends,
     {
         let mut upstreams = BTreeSet::new();
-        for addrs in iter.into_iter() {
-            let addrs = addrs.to_socket_addrs()?.map(|addr| Backend {
-                addr: SocketAddr::Inet(addr),
-                weight: 1,
-                ext: Extensions::new(),
-            });
-            upstreams.extend(addrs);
+        for target in iter.into_iter() {
+            upstreams.extend(target.into_backends()?);
         }
         Ok(Self::new(upstreams))
     }
@@ -105,5 +99,122 @@ impl ServiceDiscovery for Static {
         // no readiness
         let health = HashMap::new();
         Ok((self.get(), health))
+    }
+}
+
+/// Helper trait to build a static set of [Backend]s from various inputs.
+pub trait IntoStaticBackends {
+    /// Convert the target into concrete backends.
+    fn into_backends(self) -> IoResult<Vec<Backend>>;
+}
+
+fn parse_host_with_protocol(addr: &str, protocol: BackendProtocol) -> IoResult<Vec<Backend>> {
+    let addrs = addr.to_socket_addrs()?;
+    Ok(addrs
+        .map(|addr| Backend::from_std_socket(addr, 1, protocol))
+        .collect())
+}
+
+impl IntoStaticBackends for Backend {
+    fn into_backends(self) -> IoResult<Vec<Backend>> {
+        Ok(vec![self])
+    }
+}
+
+impl IntoStaticBackends for &Backend {
+    fn into_backends(self) -> IoResult<Vec<Backend>> {
+        Ok(vec![self.clone()])
+    }
+}
+
+impl IntoStaticBackends for SocketAddr {
+    fn into_backends(self) -> IoResult<Vec<Backend>> {
+        Ok(vec![Backend::from_socket(self, 1, BackendProtocol::Tcp)])
+    }
+}
+
+impl IntoStaticBackends for std::net::SocketAddr {
+    fn into_backends(self) -> IoResult<Vec<Backend>> {
+        Ok(vec![Backend::from_std_socket(
+            self,
+            1,
+            BackendProtocol::Tcp,
+        )])
+    }
+}
+
+impl IntoStaticBackends for (SocketAddr, BackendProtocol) {
+    fn into_backends(self) -> IoResult<Vec<Backend>> {
+        Ok(vec![Backend::from_socket(self.0, 1, self.1)])
+    }
+}
+
+impl IntoStaticBackends for (std::net::SocketAddr, BackendProtocol) {
+    fn into_backends(self) -> IoResult<Vec<Backend>> {
+        Ok(vec![Backend::from_std_socket(self.0, 1, self.1)])
+    }
+}
+
+impl IntoStaticBackends for &str {
+    fn into_backends(self) -> IoResult<Vec<Backend>> {
+        if let Some(udp) = self.strip_prefix("udp://") {
+            return parse_host_with_protocol(udp, BackendProtocol::Udp);
+        }
+
+        let host = self.strip_prefix("tcp://").unwrap_or(self);
+        parse_host_with_protocol(host, BackendProtocol::Tcp)
+    }
+}
+
+impl IntoStaticBackends for String {
+    fn into_backends(self) -> IoResult<Vec<Backend>> {
+        self.as_str().into_backends()
+    }
+}
+
+impl IntoStaticBackends for (&str, u16) {
+    fn into_backends(self) -> IoResult<Vec<Backend>> {
+        let addr = format!("{}:{}", self.0, self.1);
+        addr.into_backends()
+    }
+}
+
+impl IntoStaticBackends for (String, u16) {
+    fn into_backends(self) -> IoResult<Vec<Backend>> {
+        let addr = format!("{}:{}", self.0, self.1);
+        addr.into_backends()
+    }
+}
+
+impl IntoStaticBackends for (&str, BackendProtocol) {
+    fn into_backends(self) -> IoResult<Vec<Backend>> {
+        match self.1 {
+            BackendProtocol::Tcp => self.0.into_backends(),
+            BackendProtocol::Udp => {
+                if let Some(host) = self.0.strip_prefix("udp://") {
+                    parse_host_with_protocol(host, BackendProtocol::Udp)
+                } else {
+                    parse_host_with_protocol(self.0, BackendProtocol::Udp)
+                }
+            }
+        }
+    }
+}
+
+impl IntoStaticBackends for (String, BackendProtocol) {
+    fn into_backends(self) -> IoResult<Vec<Backend>> {
+        (self.0.as_str(), self.1).into_backends()
+    }
+}
+
+impl IntoStaticBackends for (std::net::SocketAddr, usize, BackendProtocol) {
+    fn into_backends(self) -> IoResult<Vec<Backend>> {
+        Ok(vec![Backend::from_std_socket(self.0, self.1, self.2)])
+    }
+}
+
+impl IntoStaticBackends for (SocketAddr, usize, BackendProtocol) {
+    fn into_backends(self) -> IoResult<Vec<Backend>> {
+        Ok(vec![Backend::from_socket(self.0, self.1, self.2)])
     }
 }
