@@ -29,6 +29,8 @@ use crate::server::ShutdownWatch;
 
 pub mod background;
 pub mod listening;
+#[cfg(feature = "quic")]
+pub mod quic;
 
 /// The service interface
 #[async_trait]

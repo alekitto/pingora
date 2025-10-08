@@ -30,6 +30,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
 use std::io::Result as IoResult;
+#[cfg(feature = "quic")]
+use std::net::ToSocketAddrs;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -40,6 +42,8 @@ pub mod selection;
 
 use discovery::ServiceDiscovery;
 use health_check::Health;
+#[cfg(feature = "quic")]
+use pingora_core::services::quic::{QuicBackendSelector, SelectedBackend};
 use selection::UniqueIterator;
 use selection::{BackendIter, BackendSelection};
 
@@ -47,6 +51,27 @@ pub mod prelude {
     pub use crate::health_check::{TcpHealthCheck, UdpHealthCheck};
     pub use crate::selection::RoundRobin;
     pub use crate::{BackendProtocol, LoadBalancer};
+}
+
+#[cfg(feature = "quic")]
+impl<S> QuicBackendSelector for LoadBalancer<S>
+where
+    S: selection::BackendSelection + Send + Sync + 'static,
+    S::Iter: BackendIter,
+{
+    fn select_quic_backend(&self, key: &[u8], max_iterations: usize) -> Option<SelectedBackend> {
+        self.select_with_protocol(key, max_iterations, BackendProtocol::Quic, |_, healthy| {
+            healthy
+        })
+        .and_then(|backend| {
+            backend
+                .addr
+                .to_socket_addrs()
+                .ok()
+                .and_then(|mut iter| iter.next())
+                .map(|address| SelectedBackend { address })
+        })
+    }
 }
 
 /// Supported protocols for a backend endpoint.
