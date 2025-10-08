@@ -238,6 +238,35 @@ impl ConnectionState {
             aliases: Vec::new(),
         }
     }
+
+    fn add_alias(&mut self, alias: &[u8], canonical: &[u8]) {
+        if alias == canonical {
+            return;
+        }
+
+        if self
+            .aliases
+            .iter()
+            .any(|existing| existing.as_slice() == alias)
+        {
+            return;
+        }
+
+        self.aliases.push(alias.to_vec());
+    }
+
+    fn refresh_server_aliases(&mut self, canonical: &[u8]) {
+        let ids: Vec<Vec<u8>> = self
+            .connection
+            .inner()
+            .source_ids()
+            .map(|id| id.as_ref().to_vec())
+            .collect();
+
+        for scid in ids {
+            self.add_alias(scid.as_slice(), canonical);
+        }
+    }
 }
 
 struct QuicEngine {
@@ -294,7 +323,8 @@ impl QuicEngine {
                 }
             };
 
-        let mut conn_id = header.dcid.as_ref().to_vec();
+        let original_conn_id = header.dcid.as_ref().to_vec();
+        let mut conn_id = original_conn_id.clone();
         if !self.connections.contains_key(&conn_id) {
             if let Some(mapped) = self.aliases.get(&conn_id) {
                 conn_id = mapped.clone();
@@ -325,9 +355,8 @@ impl QuicEngine {
                 trace!("QUIC connection closed (id_len={})", conn_id.len());
             } else {
                 let canonical = state.connection.source_conn_id();
-                if canonical != conn_id && !state.aliases.contains(&conn_id) {
-                    state.aliases.push(conn_id.clone());
-                }
+                state.refresh_server_aliases(&canonical);
+                state.add_alias(&original_conn_id, &canonical);
                 self.register_state(canonical, state);
             }
             return;
@@ -394,9 +423,8 @@ impl QuicEngine {
         state.timeout_at = self.compute_deadline(&state.connection);
 
         let canonical = state.connection.source_conn_id();
-        if canonical != header.dcid.as_ref() {
-            state.aliases.push(header.dcid.as_ref().to_vec());
-        }
+        state.refresh_server_aliases(&canonical);
+        state.add_alias(header.dcid.as_ref(), &canonical);
 
         if state.connection.is_closed() {
             self.remove_aliases(&state);
@@ -462,12 +490,14 @@ impl QuicEngine {
 
             let Some(deadline) = state.timeout_at else {
                 let canonical = state.connection.source_conn_id();
+                state.refresh_server_aliases(&canonical);
                 self.register_state(canonical, state);
                 continue;
             };
 
             if deadline > Instant::now() {
                 let canonical = state.connection.source_conn_id();
+                state.refresh_server_aliases(&canonical);
                 self.register_state(canonical, state);
                 continue;
             }
@@ -483,9 +513,8 @@ impl QuicEngine {
                 self.remove_aliases(&state);
             } else {
                 let canonical = state.connection.source_conn_id();
-                if canonical != key && !state.aliases.contains(&key) {
-                    state.aliases.push(key.clone());
-                }
+                state.refresh_server_aliases(&canonical);
+                state.add_alias(&key, &canonical);
                 self.register_state(canonical, state);
             }
         }
