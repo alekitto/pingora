@@ -41,6 +41,7 @@ impl BackendSelection for KetamaHashing {
                 let tag = match backend.protocol {
                     BackendProtocol::Tcp => b"tcp".as_slice(),
                     BackendProtocol::Udp => b"udp".as_slice(),
+                    BackendProtocol::Quic => b"quic".as_slice(),
                 };
                 hash_key.extend_from_slice(tag);
                 hash_key.push(0);
@@ -153,17 +154,19 @@ mod test {
         let tcp = Backend::new("10.0.0.1:443").unwrap();
         let udp_addr = "10.0.0.1:443".parse().unwrap();
         let udp = Backend::from_std_socket(udp_addr, 1, BackendProtocol::Udp);
+        let quic_addr = "10.0.0.1:8443".parse().unwrap();
+        let quic = Backend::from_std_socket(quic_addr, 1, BackendProtocol::Quic);
 
-        let backends = BTreeSet::from_iter([tcp.clone(), udp.clone()]);
+        let backends = BTreeSet::from_iter([tcp.clone(), udp.clone(), quic.clone()]);
         let hash = Arc::new(KetamaHashing::build(&backends));
 
         let mut iter = hash.iter(b"shared");
         let mut seen = HashSet::new();
 
-        for _ in 0..4 {
+        for _ in 0..6 {
             if let Some(backend) = iter.next() {
                 seen.insert(backend.protocol);
-                if seen.len() == 2 {
+                if seen.len() == 3 {
                     break;
                 }
             } else {
@@ -173,5 +176,6 @@ mod test {
 
         assert!(seen.contains(&BackendProtocol::Tcp));
         assert!(seen.contains(&BackendProtocol::Udp));
+        assert!(seen.contains(&BackendProtocol::Quic));
     }
 }
