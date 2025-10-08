@@ -31,12 +31,27 @@ use async_trait::async_trait;
 use pingora_error::Result;
 use std::{fs::Permissions, sync::Arc};
 
-use l4::{ListenerEndpoint, Stream as L4Stream};
+use l4::Stream as L4Stream;
 use tls::{Acceptor, TlsSettings};
 
+pub use crate::protocols::l4::datagram::Datagram;
 pub use crate::protocols::tls::ALPN;
 use crate::protocols::GetSocketDigest;
-pub use l4::{ServerAddress, TcpSocketOptions};
+pub use l4::{
+    ListenerEndpoint, ListenerEndpointBuilder, ServerAddress, TcpSocketOptions, UdpSocketOptions,
+};
+
+/// Create a builder for a UDP listening endpoint with default socket options.
+pub fn udp(addr: &str) -> ListenerEndpointBuilder {
+    udp_with_options(addr, None)
+}
+
+/// Create a builder for a UDP listening endpoint with the provided socket options.
+pub fn udp_with_options(addr: &str, sock_opt: Option<UdpSocketOptions>) -> ListenerEndpointBuilder {
+    let mut builder = ListenerEndpoint::builder();
+    builder.listen_addr(ServerAddress::Udp(addr.into(), sock_opt));
+    builder
+}
 
 /// The APIs to customize things like certificate during TLS server side handshake
 #[async_trait]

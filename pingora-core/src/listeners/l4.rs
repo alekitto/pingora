@@ -27,8 +27,9 @@ use std::os::unix::net::UnixListener as StdUnixListener;
 use std::os::windows::io::{AsRawSocket, FromRawSocket};
 use std::time::Duration;
 use std::{fs::Permissions, sync::Arc};
-use tokio::net::TcpSocket;
+use tokio::net::{TcpSocket, UdpSocket};
 
+use crate::protocols::l4::datagram::Datagram;
 use crate::protocols::l4::ext::{set_dscp, set_tcp_fastopen_backlog};
 use crate::protocols::l4::listener::Listener;
 pub use crate::protocols::l4::stream::Stream;
@@ -45,6 +46,7 @@ const LISTENER_BACKLOG: u32 = 65535;
 #[derive(Clone, Debug)]
 pub enum ServerAddress {
     Tcp(String, Option<TcpSocketOptions>),
+    Udp(String, Option<UdpSocketOptions>),
     #[cfg(unix)]
     Uds(String, Option<Permissions>),
 }
@@ -53,6 +55,7 @@ impl AsRef<str> for ServerAddress {
     fn as_ref(&self) -> &str {
         match &self {
             Self::Tcp(l, _) => l,
+            Self::Udp(l, _) => l,
             #[cfg(unix)]
             Self::Uds(l, _) => l,
         }
@@ -66,6 +69,23 @@ impl ServerAddress {
             _ => None,
         }
     }
+}
+
+/// UDP socket configuration options.
+#[non_exhaustive]
+#[derive(Clone, Debug, Default)]
+pub struct UdpSocketOptions {
+    /// Enable SO_REUSEADDR to allow rebinding to the address quickly.
+    pub so_reuseaddr: Option<bool>,
+    /// Enable SO_REUSEPORT to allow multiple sockets to bind to the same address and port.
+    #[cfg(unix)]
+    pub so_reuseport: Option<bool>,
+    /// Configure the size of the receive buffer (SO_RCVBUF).
+    pub recv_buffer_size: Option<usize>,
+    /// Configure the size of the send buffer (SO_SNDBUF).
+    pub send_buffer_size: Option<usize>,
+    /// Specifies the DSCP value to apply to outgoing packets.
+    pub dscp: Option<u8>,
 }
 
 /// TCP socket configuration options, this is used for setting options on
@@ -188,6 +208,18 @@ fn apply_tcp_socket_options(sock: &TcpSocket, opt: Option<&TcpSocketOptions>) ->
 
 fn from_raw_fd(address: &ServerAddress, fd: i32) -> Result<Listener> {
     match address {
+        ServerAddress::Udp(_, _) => {
+            #[cfg(unix)]
+            let std_socket = unsafe { std::net::UdpSocket::from_raw_fd(fd) };
+            #[cfg(windows)]
+            let std_socket = unsafe { std::net::UdpSocket::from_raw_socket(fd as _) };
+            std_socket
+                .set_nonblocking(true)
+                .or_err(BindError, "Failed to set UDP socket non blocking")?;
+            Ok(UdpSocket::from_std(std_socket)
+                .or_err(BindError, "Failed to convert to tokio UDP socket")?
+                .into())
+        }
         #[cfg(unix)]
         ServerAddress::Uds(addr, perm) => {
             let std_listener = unsafe { StdUnixListener::from_raw_fd(fd) };
@@ -209,6 +241,72 @@ fn from_raw_fd(address: &ServerAddress, fd: i32) -> Result<Listener> {
                 .into())
         }
     }
+}
+
+fn bind_udp(addr: &str, opt: Option<UdpSocketOptions>) -> Result<Listener> {
+    use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+
+    let sock_addr = addr
+        .to_socket_addrs()
+        .or_err_with(BindError, || format!("Invalid listen address {addr}"))?
+        .next()
+        .unwrap();
+
+    let domain = match sock_addr {
+        SocketAddr::V4(_) => Domain::IPV4,
+        SocketAddr::V6(_) => Domain::IPV6,
+    };
+
+    let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))
+        .or_err_with(BindError, || format!("fail to create address {sock_addr}"))?;
+
+    // Allow rebinding quickly by default to align with the TCP behaviour.
+    let reuseaddr = opt.as_ref().and_then(|o| o.so_reuseaddr).unwrap_or(true);
+    socket
+        .set_reuse_address(reuseaddr)
+        .or_err(BindError, "fail to set SO_REUSEADDR")?;
+
+    #[cfg(unix)]
+    if let Some(reuseport) = opt.as_ref().and_then(|o| o.so_reuseport) {
+        socket
+            .set_reuse_port(reuseport)
+            .or_err(BindError, "fail to set SO_REUSEPORT")?;
+    }
+
+    if let Some(recv) = opt.as_ref().and_then(|o| o.recv_buffer_size) {
+        socket
+            .set_recv_buffer_size(recv)
+            .or_err(BindError, "fail to set SO_RCVBUF")?;
+    }
+
+    if let Some(send) = opt.as_ref().and_then(|o| o.send_buffer_size) {
+        socket
+            .set_send_buffer_size(send)
+            .or_err(BindError, "fail to set SO_SNDBUF")?;
+    }
+
+    let sockaddr = SockAddr::from(sock_addr);
+    socket
+        .bind(&sockaddr)
+        .or_err_with(BindError, || format!("bind() failed on {addr}"))?;
+
+    #[cfg(unix)]
+    let raw = socket.as_raw_fd();
+    #[cfg(windows)]
+    let raw = socket.as_raw_socket();
+
+    if let Some(dscp) = opt.as_ref().and_then(|o| o.dscp) {
+        set_dscp(raw, dscp)?;
+    }
+
+    let std_socket: std::net::UdpSocket = socket.into();
+    std_socket
+        .set_nonblocking(true)
+        .or_err(BindError, "Failed to set UDP socket non blocking")?;
+
+    Ok(UdpSocket::from_std(std_socket)
+        .or_err(BindError, "Failed to convert to tokio UDP socket")?
+        .into())
 }
 
 async fn bind_tcp(addr: &str, opt: Option<TcpSocketOptions>) -> Result<Listener> {
@@ -264,13 +362,20 @@ async fn bind(addr: &ServerAddress) -> Result<Listener> {
         #[cfg(unix)]
         ServerAddress::Uds(l, perm) => uds::bind(l, perm.clone()),
         ServerAddress::Tcp(l, opt) => bind_tcp(l, opt.clone()).await,
+        ServerAddress::Udp(l, opt) => bind_udp(l, opt.clone()),
     }
+}
+
+#[derive(Clone, Debug)]
+enum ListenerEndpointInner {
+    Stream(Arc<Listener>),
+    Datagram(Arc<UdpSocket>),
 }
 
 #[derive(Clone, Debug)]
 pub struct ListenerEndpoint {
     listen_addr: ServerAddress,
-    listener: Arc<Listener>,
+    inner: ListenerEndpointInner,
 }
 
 #[derive(Default)]
@@ -313,10 +418,12 @@ impl ListenerEndpointBuilder {
             bind(&listen_addr).await?
         };
 
-        Ok(ListenerEndpoint {
-            listen_addr,
-            listener: Arc::new(listener),
-        })
+        let inner = match listener {
+            Listener::Udp(sock) => ListenerEndpointInner::Datagram(sock),
+            other => ListenerEndpointInner::Stream(Arc::new(other)),
+        };
+
+        Ok(ListenerEndpoint { listen_addr, inner })
     }
 
     #[cfg(windows)]
@@ -325,11 +432,12 @@ impl ListenerEndpointBuilder {
             .listen_addr
             .expect("Tried to listen with no addr specified");
         let listener = bind(&listen_addr).await?;
+        let inner = match listener {
+            Listener::Udp(sock) => ListenerEndpointInner::Datagram(sock),
+            other => ListenerEndpointInner::Stream(Arc::new(other)),
+        };
 
-        Ok(ListenerEndpoint {
-            listen_addr,
-            listener: Arc::new(listener),
-        })
+        Ok(ListenerEndpoint { listen_addr, inner })
     }
 }
 
@@ -361,13 +469,40 @@ impl ListenerEndpoint {
     }
 
     pub async fn accept(&self) -> Result<Stream> {
-        let mut stream = self
-            .listener
-            .accept()
-            .await
-            .or_err(AcceptError, "Fail to accept()")?;
-        self.apply_stream_settings(&mut stream)?;
-        Ok(stream)
+        match &self.inner {
+            ListenerEndpointInner::Stream(listener) => {
+                let mut stream = listener
+                    .accept()
+                    .await
+                    .or_err(AcceptError, "Fail to accept()")?;
+                self.apply_stream_settings(&mut stream)?;
+                Ok(stream)
+            }
+            ListenerEndpointInner::Datagram(_) => Err(pingora_error::Error::explain(
+                AcceptError,
+                "accept() is not supported for UDP listeners",
+            )),
+        }
+    }
+
+    pub async fn recv_datagram(&self) -> Result<Datagram> {
+        match &self.inner {
+            ListenerEndpointInner::Datagram(socket) => Datagram::receive(socket)
+                .await
+                .or_err(AcceptError, "Fail to recv_from()"),
+            ListenerEndpointInner::Stream(_) => Err(pingora_error::Error::explain(
+                AcceptError,
+                "recv_from() is only supported for UDP listeners",
+            )),
+        }
+    }
+
+    pub fn udp_socket(&self) -> Option<Arc<UdpSocket>> {
+        if let ListenerEndpointInner::Datagram(sock) = &self.inner {
+            Some(sock.clone())
+        } else {
+            None
+        }
     }
 }
 
@@ -506,5 +641,61 @@ mod test {
 
         // Verify the first listener still works
         assert_eq!(listener1.as_str(), addr);
+    }
+
+    #[tokio::test]
+    async fn test_listen_udp_receive() {
+        let mut builder = ListenerEndpoint::builder();
+        builder.listen_addr(ServerAddress::Udp("127.0.0.1:0".into(), None));
+
+        #[cfg(unix)]
+        let endpoint = builder.listen(None).await.unwrap();
+
+        #[cfg(windows)]
+        let endpoint = builder.listen().await.unwrap();
+
+        let listener_addr = endpoint.udp_socket().unwrap().local_addr().unwrap();
+        let sender = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let payload = b"ping".to_vec();
+        sender
+            .send_to(&payload, listener_addr)
+            .await
+            .expect("can send to UDP listener");
+
+        let datagram = endpoint.recv_datagram().await.unwrap();
+        assert_eq!(datagram.data(), payload.as_slice());
+        assert_eq!(datagram.source(), sender.local_addr().unwrap());
+        assert_eq!(datagram.destination(), listener_addr);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_listen_udp_reuseport() {
+        let mut builder1 = ListenerEndpoint::builder();
+        let mut builder2 = ListenerEndpoint::builder();
+
+        let mut options = UdpSocketOptions::default();
+        options.so_reuseaddr = Some(true);
+        options.so_reuseport = Some(true);
+
+        builder1.listen_addr(ServerAddress::Udp(
+            "127.0.0.1:0".into(),
+            Some(options.clone()),
+        ));
+        let endpoint1 = builder1.listen(None).await.unwrap();
+        let bound_addr = endpoint1.udp_socket().unwrap().local_addr().unwrap();
+
+        builder2.listen_addr(ServerAddress::Udp(
+            bound_addr.to_string(),
+            Some(options.clone()),
+        ));
+        let endpoint2 = builder2.listen(None).await.unwrap();
+
+        let sender = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        sender.send_to(b"data", bound_addr).await.unwrap();
+
+        // Ensure at least one of the sockets can receive traffic.
+        let _ = endpoint1.recv_datagram().await.unwrap();
+        drop(endpoint2);
     }
 }
