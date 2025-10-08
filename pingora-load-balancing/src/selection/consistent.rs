@@ -15,6 +15,7 @@
 //! Consistent Hashing
 
 use super::*;
+use crate::BackendProtocol;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_ketama::{Bucket, Continuum};
 use std::collections::HashMap;
@@ -32,6 +33,7 @@ impl BackendSelection for KetamaHashing {
     fn build(backends: &BTreeSet<Backend>) -> Self {
         let buckets: Vec<_> = backends
             .iter()
+            .filter(|b| b.protocol == BackendProtocol::Tcp)
             .filter_map(|b| {
                 // FIXME: ketama only supports Inet addr, UDS addrs are ignored here
                 if let SocketAddr::Inet(addr) = b.addr {
@@ -43,6 +45,7 @@ impl BackendSelection for KetamaHashing {
             .collect();
         let new_backends = backends
             .iter()
+            .filter(|b| b.protocol == BackendProtocol::Tcp)
             .map(|b| (b.addr.clone(), b.clone()))
             .collect();
         KetamaHashing {

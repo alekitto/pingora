@@ -30,7 +30,6 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
 use std::io::Result as IoResult;
-use std::net::ToSocketAddrs;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -45,9 +44,16 @@ use selection::UniqueIterator;
 use selection::{BackendIter, BackendSelection};
 
 pub mod prelude {
-    pub use crate::health_check::TcpHealthCheck;
+    pub use crate::health_check::{TcpHealthCheck, UdpHealthCheck};
     pub use crate::selection::RoundRobin;
     pub use crate::LoadBalancer;
+}
+
+/// Supported protocols for a backend endpoint.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BackendProtocol {
+    Tcp,
+    Udp,
 }
 
 /// [Backend] represents a server to proxy or connect to.
@@ -56,6 +62,8 @@ pub mod prelude {
 pub struct Backend {
     /// The address to the backend server.
     pub addr: SocketAddr,
+    /// The transport protocol to the backend server.
+    pub protocol: BackendProtocol,
     /// The relative weight of the server. Load balancing algorithms will
     /// proportionally distributed traffic according to this value.
     pub weight: usize,
@@ -83,15 +91,55 @@ impl Backend {
     /// Creates a new [Backend] with the specified `weight`. The function will try to parse
     /// `addr` into a [std::net::SocketAddr].
     pub fn new_with_weight(addr: &str, weight: usize) -> Result<Self> {
+        if let Some(udp_addr) = addr.strip_prefix("udp://") {
+            return Self::new_udp_with_weight(udp_addr, weight);
+        }
+
+        let addr = addr
+            .strip_prefix("tcp://")
+            .unwrap_or(addr)
+            .parse()
+            .or_err(ErrorType::InternalError, "invalid socket addr")?;
+
+        Ok(Self::from_std_socket(addr, weight, BackendProtocol::Tcp))
+        // TODO: UDS
+    }
+
+    /// Create a new UDP [Backend] with `weight` 1.
+    pub fn new_udp(addr: &str) -> Result<Self> {
+        Self::new_udp_with_weight(addr, 1)
+    }
+
+    /// Create a new UDP [Backend] with a custom weight.
+    pub fn new_udp_with_weight(addr: &str, weight: usize) -> Result<Self> {
         let addr = addr
             .parse()
             .or_err(ErrorType::InternalError, "invalid socket addr")?;
-        Ok(Backend {
+        Ok(Self::from_std_socket(addr, weight, BackendProtocol::Udp))
+    }
+
+    /// Create a [Backend] from a standard socket address with protocol metadata.
+    pub fn from_std_socket(
+        addr: std::net::SocketAddr,
+        weight: usize,
+        protocol: BackendProtocol,
+    ) -> Self {
+        Backend {
             addr: SocketAddr::Inet(addr),
+            protocol,
             weight,
             ext: Extensions::new(),
-        })
-        // TODO: UDS
+        }
+    }
+
+    /// Create a [Backend] from a Pingora [SocketAddr] with protocol metadata.
+    pub fn from_socket(addr: SocketAddr, weight: usize, protocol: BackendProtocol) -> Self {
+        Backend {
+            addr,
+            protocol,
+            weight,
+            ext: Extensions::new(),
+        }
     }
 
     pub(crate) fn hash_key(&self) -> u64 {
@@ -209,12 +257,15 @@ impl Backends {
     /// When the health check is set, this function will return false for the `backend` it
     /// doesn't know.
     pub fn ready(&self, backend: &Backend) -> bool {
-        self.health
-            .load()
-            .get(&backend.hash_key())
-            // Racing: return `None` when this function is called between the
-            // backend store and the health store
-            .map_or(self.health_check.is_none(), |h| h.ready())
+        let health = self.health.load();
+        let entry = health.get(&backend.hash_key());
+        match &self.health_check {
+            Some(check) if !check.supports_protocol(backend.protocol) => {
+                entry.map_or(true, |h| h.ready())
+            }
+            Some(_) => entry.map_or(false, |h| h.ready()),
+            None => entry.map_or(true, |h| h.ready()),
+        }
     }
 
     /// Manually set if a [Backend] is ready to serve traffic.
@@ -290,14 +341,18 @@ impl Backends {
                 let check = health_check.clone();
                 let ht = health_table.clone();
                 runtime.spawn(async move {
-                    check_and_report(&backend, &check, &ht).await;
+                    if check.supports_protocol(backend.protocol) {
+                        check_and_report(&backend, &check, &ht).await;
+                    }
                 })
             });
 
             futures::future::join_all(jobs).await;
         } else {
             for backend in backends.iter() {
-                check_and_report(backend, health_check, &self.health.load()).await;
+                if health_check.supports_protocol(backend.protocol) {
+                    check_and_report(backend, health_check, &self.health.load()).await;
+                }
             }
         }
     }
@@ -334,7 +389,7 @@ where
     /// the input cannot be directly parsed as [SocketAddr].
     pub fn try_from_iter<A, T: IntoIterator<Item = A>>(iter: T) -> IoResult<Self>
     where
-        A: ToSocketAddrs,
+        A: discovery::IntoStaticBackends,
     {
         let discovery = discovery::Static::try_from_iter(iter)?;
         let backends = Backends::new(discovery);
@@ -379,7 +434,9 @@ where
     /// a lot steps.
     // TODO: consider remove `max_iterations` as users have no idea how to set it.
     pub fn select(&self, key: &[u8], max_iterations: usize) -> Option<Backend> {
-        self.select_with(key, max_iterations, |_, health| health)
+        self.select_with_protocol(key, max_iterations, BackendProtocol::Tcp, |_, health| {
+            health
+        })
     }
 
     /// Similar to [Self::select], return the first healthy [Backend] according to the selection algorithm
@@ -393,9 +450,36 @@ where
     where
         F: Fn(&Backend, bool) -> bool,
     {
+        self.select_with_protocol(key, max_iterations, BackendProtocol::Tcp, accept)
+    }
+
+    /// Return the first healthy [Backend] for the given protocol.
+    pub fn select_protocol(
+        &self,
+        key: &[u8],
+        max_iterations: usize,
+        protocol: BackendProtocol,
+    ) -> Option<Backend> {
+        self.select_with_protocol(key, max_iterations, protocol, |_, health| health)
+    }
+
+    /// Similar to [Self::select_with] but restricts the backend protocol considered.
+    pub fn select_with_protocol<F>(
+        &self,
+        key: &[u8],
+        max_iterations: usize,
+        protocol: BackendProtocol,
+        accept: F,
+    ) -> Option<Backend>
+    where
+        F: Fn(&Backend, bool) -> bool,
+    {
         let selection = self.selector.load();
         let mut iter = UniqueIterator::new(selection.iter(key), max_iterations);
         while let Some(b) = iter.get_next() {
+            if b.protocol != protocol {
+                continue;
+            }
             if accept(&b, self.backends.ready(&b)) {
                 return Some(b);
             }
@@ -423,6 +507,7 @@ mod test {
 
     use super::*;
     use async_trait::async_trait;
+    use tokio::net::TcpListener;
 
     #[tokio::test]
     async fn test_static_backends() {
@@ -439,16 +524,33 @@ mod test {
     #[tokio::test]
     async fn test_backends() {
         let discovery = discovery::Static::default();
-        let good1 = Backend::new("1.1.1.1:80").unwrap();
+        let listener1 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr1 = listener1.local_addr().unwrap();
+        let good1 = Backend::from_std_socket(addr1, 1, BackendProtocol::Tcp);
         discovery.add(good1.clone());
-        let good2 = Backend::new("1.0.0.1:80").unwrap();
+        let listener2 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr2 = listener2.local_addr().unwrap();
+        let good2 = Backend::from_std_socket(addr2, 1, BackendProtocol::Tcp);
         discovery.add(good2.clone());
-        let bad = Backend::new("127.0.0.1:79").unwrap();
+        let bad_addr = {
+            let tmp = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = tmp.local_addr().unwrap();
+            drop(tmp);
+            addr
+        };
+        let bad = Backend::from_std_socket(bad_addr, 1, BackendProtocol::Tcp);
         discovery.add(bad.clone());
 
         let mut backends = Backends::new(Box::new(discovery));
         let check = health_check::TcpHealthCheck::new();
         backends.set_health_check(check);
+
+        let accept1 = tokio::spawn(async move {
+            let _ = listener1.accept().await;
+        });
+        let accept2 = tokio::spawn(async move {
+            let _ = listener2.accept().await;
+        });
 
         // true: new backend discovered
         let updated = AtomicBool::new(false);
@@ -467,6 +569,8 @@ mod test {
         assert!(!updated.load(Relaxed));
 
         backends.run_health_check(false).await;
+        accept1.await.unwrap();
+        accept2.await.unwrap();
 
         let backend = backends.get_backend();
         assert!(backend.contains(&good1));
@@ -549,16 +653,33 @@ mod test {
     #[tokio::test]
     async fn test_parallel_health_check() {
         let discovery = discovery::Static::default();
-        let good1 = Backend::new("1.1.1.1:80").unwrap();
+        let listener1 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr1 = listener1.local_addr().unwrap();
+        let good1 = Backend::from_std_socket(addr1, 1, BackendProtocol::Tcp);
         discovery.add(good1.clone());
-        let good2 = Backend::new("1.0.0.1:80").unwrap();
+        let listener2 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr2 = listener2.local_addr().unwrap();
+        let good2 = Backend::from_std_socket(addr2, 1, BackendProtocol::Tcp);
         discovery.add(good2.clone());
-        let bad = Backend::new("127.0.0.1:79").unwrap();
+        let bad_addr = {
+            let tmp = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = tmp.local_addr().unwrap();
+            drop(tmp);
+            addr
+        };
+        let bad = Backend::from_std_socket(bad_addr, 1, BackendProtocol::Tcp);
         discovery.add(bad.clone());
 
         let mut backends = Backends::new(Box::new(discovery));
         let check = health_check::TcpHealthCheck::new();
         backends.set_health_check(check);
+
+        let accept1 = tokio::spawn(async move {
+            let _ = listener1.accept().await;
+        });
+        let accept2 = tokio::spawn(async move {
+            let _ = listener2.accept().await;
+        });
 
         // true: new backend discovered
         let updated = AtomicBool::new(false);
@@ -569,10 +690,58 @@ mod test {
         assert!(updated.load(Relaxed));
 
         backends.run_health_check(true).await;
+        accept1.await.unwrap();
+        accept2.await.unwrap();
 
         assert!(backends.ready(&good1));
         assert!(backends.ready(&good2));
         assert!(!backends.ready(&bad));
+    }
+
+    #[tokio::test]
+    async fn test_udp_selection() {
+        use health_check::UdpHealthCheck;
+
+        let discovery = discovery::Static::default();
+        let tcp_backend = Backend::new("127.0.0.1:8080").unwrap();
+        discovery.add(tcp_backend.clone());
+
+        let udp_socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let udp_addr = udp_socket.local_addr().unwrap();
+        let udp_backend = Backend::from_std_socket(udp_addr, 1, BackendProtocol::Udp);
+        discovery.add(udp_backend.clone());
+
+        let mut udp_check = UdpHealthCheck::default();
+        udp_check.payload = b"ping".to_vec();
+        udp_check.expected_response = Some(b"pong".to_vec());
+
+        let mut backends = Backends::new(Box::new(discovery));
+        backends.set_health_check(Box::new(udp_check));
+        backends.update(|_| {}).await.unwrap();
+
+        let responder = tokio::spawn(async move {
+            let response = b"pong".to_vec();
+            let mut buf = [0u8; 32];
+            let (len, peer) = udp_socket.recv_from(&mut buf).await.unwrap();
+            if &buf[..len] == b"ping" {
+                udp_socket.send_to(&response, peer).await.unwrap();
+            }
+        });
+
+        backends.run_health_check(false).await;
+        responder.await.unwrap();
+
+        assert!(backends.ready(&udp_backend));
+        assert!(backends.ready(&tcp_backend));
+
+        let lb = LoadBalancer::<selection::RoundRobin>::from_backends(backends);
+        let selected_udp = lb
+            .select_protocol(b"udp", 10, BackendProtocol::Udp)
+            .expect("udp backend present");
+        assert_eq!(selected_udp.protocol, BackendProtocol::Udp);
+
+        let selected_tcp = lb.select(b"tcp", 10).expect("tcp backend present");
+        assert_eq!(selected_tcp.protocol, BackendProtocol::Tcp);
     }
 
     mod thread_safety {
