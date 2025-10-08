@@ -674,9 +674,11 @@ mod test {
         let mut builder1 = ListenerEndpoint::builder();
         let mut builder2 = ListenerEndpoint::builder();
 
-        let mut options = UdpSocketOptions::default();
-        options.so_reuseaddr = Some(true);
-        options.so_reuseport = Some(true);
+        let options = UdpSocketOptions {
+            so_reuseport: Some(true),
+            so_reuseaddr: Some(true),
+            ..Default::default()
+        };
 
         builder1.listen_addr(ServerAddress::Udp(
             "127.0.0.1:0".into(),
