@@ -70,6 +70,13 @@ async fn udp_endpoint_supports_reuseport() {
         .await
         .expect("send datagram");
 
-    let _ = endpoint1.recv_datagram().await.expect("receive datagram");
+    tokio::select! {
+        res = endpoint1.recv_datagram() => {
+            res.unwrap();
+        }
+        res = endpoint2.recv_datagram() => {
+            res.unwrap();
+        }
+    }
     drop(endpoint2);
 }
