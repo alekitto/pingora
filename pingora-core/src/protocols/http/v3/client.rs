@@ -99,7 +99,10 @@ impl HttpSession {
     fn convert_request_headers(req: &RequestHeader) -> Result<Vec<quiche::h3::Header>> {
         let mut headers = Vec::new();
 
-        headers.push(quiche::h3::Header::new(b":method", req.method.as_str().as_bytes()));
+        headers.push(quiche::h3::Header::new(
+            b":method",
+            req.method.as_str().as_bytes(),
+        ));
 
         let scheme = req
             .uri
@@ -144,19 +147,25 @@ impl HttpSession {
             if name_bytes == b":status" {
                 let value = std::str::from_utf8(header.value())
                     .or_err(H3_ERROR, "invalid HTTP/3 status header")?;
-                status = Some(value.parse::<u16>().or_err(H3_ERROR, "invalid status code")?);
+                status = Some(
+                    value
+                        .parse::<u16>()
+                        .or_err(H3_ERROR, "invalid status code")?,
+                );
                 continue;
             }
             fields.push((
                 HeaderName::from_bytes(name_bytes).or_err(H3_ERROR, "invalid header name")?,
-                HeaderValue::from_bytes(header.value())
-                    .or_err(H3_ERROR, "invalid header value")?,
+                HeaderValue::from_bytes(header.value()).or_err(H3_ERROR, "invalid header value")?,
             ));
         }
 
-        let mut response = ResponseHeader::build_no_case(status.unwrap_or(200), Some(fields.len()))?;
+        let mut response =
+            ResponseHeader::build_no_case(status.unwrap_or(200), Some(fields.len()))?;
         for (name, value) in fields {
-            response.append_header(name, value).or_err(H3_ERROR, "append header")?;
+            response
+                .append_header(name, value)
+                .or_err(H3_ERROR, "append header")?;
         }
         Ok(response)
     }
@@ -168,9 +177,10 @@ impl HttpSession {
                     let send_future = self.upstream.send(&packet);
                     match self.write_timeout {
                         Some(timeout_duration) => {
-                            timeout(timeout_duration, send_future)
-                                .await
-                                .or_err(WriteTimedout, "timeout while flushing HTTP/3 datagram")??;
+                            timeout(timeout_duration, send_future).await.or_err(
+                                WriteTimedout,
+                                "timeout while flushing HTTP/3 datagram",
+                            )??;
                         }
                         None => {
                             send_future
@@ -240,10 +250,11 @@ impl HttpSession {
         buffer.resize(4096, 0);
 
         loop {
-            match self
-                .h3
-                .recv_body(self.upstream.connection_mut().inner_mut(), stream_id, &mut buffer)
-            {
+            match self.h3.recv_body(
+                self.upstream.connection_mut().inner_mut(),
+                stream_id,
+                &mut buffer,
+            ) {
                 Ok(read) => {
                     if read == 0 {
                         break;
@@ -271,13 +282,28 @@ impl HttpSession {
         let deadline = self.upstream.handshake_timeout();
 
         while !self.upstream.connection().is_established() {
-            if let Some(timeout) = deadline {
-                if start.elapsed() > timeout {
+            if let Some(timeout_duration) = deadline {
+                let elapsed = start.elapsed();
+                if elapsed >= timeout_duration {
                     return Err(Error::explain(ConnectTimedout, "QUIC handshake timed out"));
                 }
-            }
 
-            self.recv_datagram().await?;
+                let remaining = match timeout_duration.checked_sub(elapsed) {
+                    Some(remaining) if !remaining.is_zero() => remaining,
+                    _ => return Err(Error::explain(ConnectTimedout, "QUIC handshake timed out")),
+                };
+
+                match timeout(remaining, self.recv_datagram()).await {
+                    Ok(result) => {
+                        result?;
+                    }
+                    Err(_) => {
+                        return Err(Error::explain(ConnectTimedout, "QUIC handshake timed out"));
+                    }
+                }
+            } else {
+                self.recv_datagram().await?;
+            }
         }
 
         Ok(())
@@ -289,11 +315,7 @@ impl HttpSession {
         let headers = Self::convert_request_headers(&req)?;
         let stream_id = self
             .h3
-            .send_request(
-                self.upstream.connection_mut().inner_mut(),
-                &headers,
-                end,
-            )
+            .send_request(self.upstream.connection_mut().inner_mut(), &headers, end)
             .map_err(|err| Self::quic_error("HTTP/3 send_request", err))?;
         self.stream_id = Some(stream_id);
         self.flush_quic().await
