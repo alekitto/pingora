@@ -14,6 +14,6 @@
 
 //! HTTP/3 support.
 
-#[cfg(feature = "http3_client")]
+#[cfg(feature = "http3")]
 pub mod client;
 pub mod server;

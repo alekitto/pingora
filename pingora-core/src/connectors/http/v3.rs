@@ -1,4 +1,4 @@
-#![cfg(feature = "http3_client")]
+#![cfg(feature = "http3")]
 
 use std::sync::Arc;
 
