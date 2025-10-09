@@ -21,10 +21,14 @@
 use crate::apps::ServerApp;
 use crate::listeners::tls::TlsSettings;
 use crate::listeners::{Listeners, ServerAddress, TcpSocketOptions, TransportStack};
+#[cfg(feature = "quic")]
+use crate::protocols::quic::ServerConfig;
 use crate::protocols::Stream;
 #[cfg(unix)]
 use crate::server::ListenFds;
 use crate::server::ShutdownWatch;
+#[cfg(feature = "quic")]
+use crate::services::http3::Http3Endpoint;
 use crate::services::Service as ServiceTrait;
 
 use async_trait::async_trait;
@@ -41,6 +45,8 @@ pub struct Service<A> {
     name: String,
     listeners: Listeners,
     app_logic: Option<A>,
+    #[cfg(feature = "quic")]
+    http3_endpoints: Vec<Http3Endpoint>,
     /// The number of preferred threads. `None` to follow global setting.
     pub threads: Option<usize>,
 }
@@ -52,6 +58,8 @@ impl<A> Service<A> {
             name,
             listeners: Listeners::new(),
             app_logic: Some(app_logic),
+            #[cfg(feature = "quic")]
+            http3_endpoints: Vec::new(),
             threads: None,
         }
     }
@@ -63,6 +71,8 @@ impl<A> Service<A> {
             name,
             listeners,
             app_logic: Some(app_logic),
+            #[cfg(feature = "quic")]
+            http3_endpoints: Vec::new(),
             threads: None,
         }
     }
@@ -112,6 +122,20 @@ impl<A> Service<A> {
     /// Add an endpoint according to the given [`ServerAddress`]
     pub fn add_address(&mut self, addr: ServerAddress) {
         self.listeners.add_address(addr);
+    }
+
+    /// Add an HTTP/3 endpoint backed by QUIC to this service.
+    #[cfg(feature = "quic")]
+    pub fn add_http3_endpoint(
+        &mut self,
+        listen_addr: impl Into<String>,
+        server_config: ServerConfig,
+    ) -> &mut Http3Endpoint {
+        self.http3_endpoints
+            .push(Http3Endpoint::new(listen_addr, server_config));
+        self.http3_endpoints
+            .last_mut()
+            .expect("just pushed an HTTP/3 endpoint")
     }
 
     /// Get a reference to the application inside this service
@@ -221,11 +245,14 @@ impl<A: ServerApp + Send + Sync + 'static> ServiceTrait for Service<A> {
         listeners_per_fd: usize,
     ) {
         let runtime = current_handle();
+        #[cfg(unix)]
+        let tcp_fds = fds.clone();
+
         let endpoints = self
             .listeners
             .build(
                 #[cfg(unix)]
-                fds,
+                tcp_fds,
             )
             .await
             .expect("Failed to build listeners");
@@ -251,6 +278,28 @@ impl<A: ServerApp + Send + Sync + 'static> ServiceTrait for Service<A> {
                 handlers.push(jh);
             }
         });
+
+        #[cfg(feature = "quic")]
+        {
+            #[cfg(unix)]
+            let http3_fds = fds.clone();
+            #[cfg(not(unix))]
+            let http3_fds = ();
+
+            for endpoint in &self.http3_endpoints {
+                let mut tasks = endpoint
+                    .spawn_workers(
+                        &runtime,
+                        http3_fds.clone(),
+                        shutdown.clone(),
+                        listeners_per_fd,
+                        Arc::clone(&app_logic),
+                        &self.name,
+                    )
+                    .await;
+                handlers.append(&mut tasks);
+            }
+        }
 
         futures::future::join_all(handlers).await;
         self.listeners.cleanup();
