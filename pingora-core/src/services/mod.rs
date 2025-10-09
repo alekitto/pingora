@@ -28,9 +28,14 @@ use crate::server::ListenFds;
 use crate::server::ShutdownWatch;
 
 pub mod background;
+#[cfg(feature = "quic")]
+pub mod http3;
 pub mod listening;
 #[cfg(feature = "quic")]
 pub mod quic;
+
+#[cfg(feature = "quic")]
+pub use http3::{Http3Endpoint, Http3Service};
 
 /// The service interface
 #[async_trait]
