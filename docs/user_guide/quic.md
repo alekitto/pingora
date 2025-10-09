@@ -1,22 +1,26 @@
-# Servizio QUIC
+# QUIC service
 
-Il servizio QUIC di Pingora fornisce un listener UDP basato su [`quiche`](https://github.com/cloudflare/quiche) che termina le connessioni in ingresso e le abbina a un backend selezionato tramite il `LoadBalancer`. Questa guida illustra i prerequisiti, come configurare certificati e listener e quali limiti e strategie operative tenere presenti.
+Pingora's QUIC service offers a UDP listener built on top of [`quiche`](https://github.com/cloudflare/quiche) that terminates
+incoming connections and forwards them to a backend selected through the `LoadBalancer`. This guide walks through prerequisites,
+certificate and listener configuration, and the operational limits to keep in mind.
 
-## Prerequisiti e abilitazione delle feature
+## Prerequisites and feature flags
 
-* Il supporto è disponibile solo compilando con la feature `quic`, che attiva il binding a `quiche` sia in `pingora-core` sia in `pingora-load-balancing`.
-* Per utilizzare le ricette del bilanciatore occorre aggiungere anche la feature `lb` quando si eseguono esempi o binari.
-* Il listener richiede certificati TLS 1.3 in formato PEM.
+* Support is available only when compiling with the `quic` feature, which links `quiche` into both `pingora-core` and
+  `pingora-load-balancing`.
+* To use the load balancer recipes enable the `lb` feature as well when running examples or binaries.
+* The listener requires TLS 1.3 certificates in PEM format.
 
-Esempio di comando per lanciare un binario con entrambe le feature:
+Example command to run the example binary with both features enabled:
 
 ```bash
 cargo run -p pingora --example quic_lb --features "lb quic"
 ```
 
-## Configurazione del trasporto e dei certificati
+## Transport and certificate configuration
 
-Costruire il `ServerConfig` partendo da `TransportConfigBuilder` consente di caricare certificato e chiave privata in PEM e di definire la lista ALPN annunciata ai client. Dopo la creazione è possibile abilitare esplicitamente il supporto ai datagrammi QUIC:
+Building a `ServerConfig` from `TransportConfigBuilder` lets you load a PEM certificate and private key and declare the ALPN
+protocols announced to clients. After creation you can explicitly enable QUIC datagram support:
 
 ```rust
 use pingora_core::protocols::quic::TransportConfigBuilder;
@@ -33,11 +37,13 @@ server_config
     .with_config_mut(|cfg| cfg.enable_dgram(true, 32, 32))?;
 ```
 
-Lo stesso approccio vale per la configurazione client nei test o nei connettori QUIC. Le chiavi devono essere coerenti con quelle presentate dai backend e con i vincoli di sicurezza dell'ambiente di esecuzione.
+Use the same approach for client configuration in tests or QUIC connectors. The keys must match what backends present and the
+security requirements of your environment.
 
-## Integrazione con il LoadBalancer
+## LoadBalancer integration
 
-`LoadBalancer` implementa il trait `QuicBackendSelector`, quindi può essere passato direttamente al costruttore del servizio. I backend QUIC vengono dichiarati con il prefisso `quic://` e mantengono le stesse proprietà (peso, metadati) degli altri protocolli supportati.
+`LoadBalancer` implements the `QuicBackendSelector` trait, so you can pass it directly into the service constructor. QUIC
+backends are declared with the `quic://` prefix and keep the same properties (weight, metadata) as other supported protocols.
 
 ```rust
 use pingora_load_balancing::{Backend, LoadBalancer};
@@ -52,11 +58,13 @@ let mut service = QuicService::new("QUIC LB", listen_addr, server_config, select
 service.set_max_backend_iterations(8);
 ```
 
-È possibile personalizzare le opzioni del socket UDP e i limiti delle code di ricezione/trasmissione per adattarsi al carico previsto.
+You can customize UDP socket options and receive/transmit queue limits to align with the expected load.
 
-## Esempio completo
+## Full example
 
-L'esempio `quic_lb` mostra come avviare un server Pingora che ascolta su QUIC, popola un bilanciatore round robin e collega la selezione del backend al servizio. I percorsi di certificato e chiave predefiniti riutilizzano il materiale di test incluso nel repository e possono essere sovrascritti da riga di comando.
+The `quic_lb` example shows how to start a Pingora server that listens on QUIC, populates a round-robin load balancer, and wires
+the backend selection into the service. The default certificate and key reuse the test material included in the repository and
+can be overridden at the command line.
 
 ```bash
 cargo run -p pingora --example quic_lb \
@@ -65,18 +73,23 @@ cargo run -p pingora --example quic_lb \
     --backend quic://10.0.0.10:4433 --backend quic://10.0.0.11:4433
 ```
 
-## Health check e fallback
+## Health checks and fallback
 
-Al momento i checker integrati non supportano le sonde QUIC native: invocare un health check su un backend con protocollo QUIC restituisce l'errore `quic_health_check_unavailable`. È quindi consigliabile:
+Built-in checkers do not yet support native QUIC probes: running a health check on a QUIC backend returns the
+`quic_health_check_unavailable` error. You can:
 
-* Delegare il monitoraggio a un sistema esterno (ad esempio Prometheus o un orchestratore) che aggiorni lo stato dei backend tramite discovery dinamica.
-* Oppure effettuare un controllo UDP/TCP di portata ridotta sugli stessi host per mantenere il ciclo di vita allineato.
+* Delegate monitoring to an external system (for example Prometheus or an orchestrator) that updates backend state through
+  dynamic discovery.
+* Run lightweight UDP/TCP reachability checks against the same hosts to keep lifecycle management aligned.
 
-Quando un backend QUIC diventa indisponibile si può usare `LoadBalancer::select_with_protocol` per cadere su endpoint TCP (HTTP/1.1 o HTTP/2) già esistenti, oppure istruire l'applicazione a degradare il traffico verso un servizio HTTP tradizionale mantenendo il tracciamento del client.
+When a QUIC backend becomes unavailable you can call `LoadBalancer::select_with_protocol` to fall back to existing TCP endpoints
+(HTTP/1.1 or HTTP/2), or instruct the application to degrade traffic toward a traditional HTTP service while preserving client
+tracking.
 
-## Limiti noti
+## Known limitations
 
-* Il servizio termina il trasporto QUIC e demanda al backend selezionato la logica applicativa (HTTP/3, gRPC, ecc.); non esiste ancora un'integrazione diretta con gli handler HTTP inclusi in Pingora.
-* Non sono disponibili health check QUIC first-party.
-* La configurazione richiede certificati TLS in formato PEM caricabili da disco.
-* L'abilitazione della feature `quic` comporta la compilazione del crate `quiche`, che potrebbe richiedere toolchain C compatibili sul sistema di build.
+* The service terminates QUIC transport and delegates application logic (HTTP/3, gRPC, etc.) to the selected backend; there is
+  no direct integration with Pingora's built-in HTTP handlers yet.
+* First-party QUIC health checks are not available.
+* Configuration requires PEM-formatted TLS certificates readable from disk.
+* Enabling the `quic` feature pulls in the `quiche` crate, which may require a compatible C toolchain on the build system.
