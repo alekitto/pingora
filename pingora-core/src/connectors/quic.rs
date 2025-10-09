@@ -18,6 +18,7 @@ pub struct QuicUpstream {
     endpoint: Endpoint,
     connection: Connection,
     remote_addr: SocketAddr,
+    handshake_timeout: Option<Duration>,
 }
 
 impl QuicUpstream {
@@ -44,6 +45,11 @@ impl QuicUpstream {
     /// Remote backend address.
     pub fn remote_addr(&self) -> SocketAddr {
         self.remote_addr
+    }
+
+    /// Configured handshake timeout for the upstream if any.
+    pub fn handshake_timeout(&self) -> Option<Duration> {
+        self.handshake_timeout
     }
 
     /// Receive the next datagram from the backend.
@@ -107,6 +113,22 @@ impl QuicConnector {
 
         let options = self.quic_options(peer);
 
+        if let Some(opt) = options {
+            if !opt.alpn_protocols.is_empty() {
+                let protos: Vec<&[u8]> = opt.alpn_protocols.iter().map(Vec::as_slice).collect();
+                let result = self
+                    .config
+                    .transport()
+                    .with_config_mut(|cfg| cfg.set_application_protos(&protos));
+                if let Err(err) = result {
+                    return Err(Error::new(
+                        InternalError,
+                        format!("failed to configure QUIC ALPN: {err}"),
+                    ));
+                }
+            }
+        }
+
         let scid_bytes = match options.and_then(|opt| opt.source_connection_id.clone()) {
             Some(scid) if scid.len() <= quiche::MAX_CONN_ID_LEN => scid,
             Some(scid) => {
@@ -159,6 +181,7 @@ impl QuicConnector {
             endpoint,
             connection,
             remote_addr,
+            handshake_timeout: options.and_then(|opt| opt.handshake_timeout),
         };
 
         Self::flush_initial(&mut upstream).await?;

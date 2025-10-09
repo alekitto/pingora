@@ -19,12 +19,16 @@ use std::time::Duration;
 
 use super::v1::client::HttpSession as Http1Session;
 use super::v2::client::Http2Session;
+#[cfg(feature = "quic")]
+use super::v3::client::HttpSession as Http3Session;
 use crate::protocols::{Digest, SocketAddr, Stream};
 
 /// A type for Http client session. It can be either an Http1 connection or an Http2 stream.
 pub enum HttpSession {
     H1(Http1Session),
     H2(Http2Session),
+    #[cfg(feature = "quic")]
+    H3(Http3Session),
 }
 
 impl HttpSession {
@@ -51,6 +55,8 @@ impl HttpSession {
                 Ok(())
             }
             HttpSession::H2(h2) => h2.write_request_header(req, false),
+            #[cfg(feature = "quic")]
+            HttpSession::H3(h3) => h3.write_request_header(req, false).await,
         }
     }
 
@@ -63,6 +69,8 @@ impl HttpSession {
                 Ok(())
             }
             HttpSession::H2(h2) => h2.write_request_body(data, end).await,
+            #[cfg(feature = "quic")]
+            HttpSession::H3(h3) => h3.write_request_body(data, end).await,
         }
     }
 
@@ -74,6 +82,8 @@ impl HttpSession {
                 Ok(())
             }
             HttpSession::H2(h2) => h2.finish_request_body(),
+            #[cfg(feature = "quic")]
+            HttpSession::H3(h3) => h3.finish_request_body().await,
         }
     }
 
@@ -84,6 +94,8 @@ impl HttpSession {
         match self {
             HttpSession::H1(h1) => h1.read_timeout = timeout,
             HttpSession::H2(h2) => h2.read_timeout = timeout,
+            #[cfg(feature = "quic")]
+            HttpSession::H3(h3) => h3.set_read_timeout(timeout),
         }
     }
 
@@ -94,6 +106,8 @@ impl HttpSession {
         match self {
             HttpSession::H1(h1) => h1.write_timeout = timeout,
             HttpSession::H2(h2) => h2.write_timeout = timeout,
+            #[cfg(feature = "quic")]
+            HttpSession::H3(h3) => h3.set_write_timeout(timeout),
         }
     }
 
@@ -107,6 +121,8 @@ impl HttpSession {
                 Ok(())
             }
             HttpSession::H2(h2) => h2.read_response_header().await,
+            #[cfg(feature = "quic")]
+            HttpSession::H3(h3) => h3.read_response_header().await,
         }
     }
 
@@ -117,6 +133,8 @@ impl HttpSession {
         match self {
             HttpSession::H1(h1) => h1.read_body_bytes().await,
             HttpSession::H2(h2) => h2.read_response_body().await,
+            #[cfg(feature = "quic")]
+            HttpSession::H3(h3) => h3.read_response_body().await,
         }
     }
 
@@ -125,6 +143,8 @@ impl HttpSession {
         match self {
             HttpSession::H1(h1) => h1.is_body_done(),
             HttpSession::H2(h2) => h2.response_finished(),
+            #[cfg(feature = "quic")]
+            HttpSession::H3(h3) => h3.response_finished(),
         }
     }
 
@@ -135,6 +155,8 @@ impl HttpSession {
         match self {
             Self::H1(s) => s.shutdown().await,
             Self::H2(s) => s.shutdown(),
+            #[cfg(feature = "quic")]
+            Self::H3(s) => s.shutdown().await,
         }
     }
 
@@ -145,6 +167,8 @@ impl HttpSession {
         match self {
             Self::H1(s) => s.resp_header(),
             Self::H2(s) => s.response_header(),
+            #[cfg(feature = "quic")]
+            Self::H3(s) => s.response_header(),
         }
     }
 
@@ -156,6 +180,8 @@ impl HttpSession {
         match self {
             Self::H1(s) => Some(s.digest()),
             Self::H2(s) => s.digest(),
+            #[cfg(feature = "quic")]
+            Self::H3(s) => Some(s.digest()),
         }
     }
 
@@ -166,6 +192,8 @@ impl HttpSession {
         match self {
             Self::H1(s) => Some(s.digest_mut()),
             Self::H2(s) => s.digest_mut(),
+            #[cfg(feature = "quic")]
+            Self::H3(s) => Some(s.digest_mut()),
         }
     }
 
@@ -174,6 +202,8 @@ impl HttpSession {
         match self {
             Self::H1(s) => s.server_addr(),
             Self::H2(s) => s.server_addr(),
+            #[cfg(feature = "quic")]
+            Self::H3(s) => s.server_addr(),
         }
     }
 
@@ -182,6 +212,8 @@ impl HttpSession {
         match self {
             Self::H1(s) => s.client_addr(),
             Self::H2(s) => s.client_addr(),
+            #[cfg(feature = "quic")]
+            Self::H3(s) => s.client_addr(),
         }
     }
 
@@ -191,6 +223,8 @@ impl HttpSession {
         match self {
             Self::H1(s) => Some(s.stream()),
             Self::H2(_) => None,
+            #[cfg(feature = "quic")]
+            Self::H3(_) => None,
         }
     }
 }
