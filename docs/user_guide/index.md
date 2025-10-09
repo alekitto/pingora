@@ -21,6 +21,7 @@ In this guide, we will cover the most used features, operations and settings of 
 * [Connection pooling and reuse](pooling.md)
 * [Handling failures and failover](failover.md)
 * [RateLimiter quickstart](rate_limiter.md)
+* [Servizio QUIC](quic.md)
 
 ## Advanced topics (WIP)
 * [Pingora internals](internals.md)

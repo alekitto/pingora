@@ -102,7 +102,7 @@ proxy = ["pingora-proxy"]
 ## Include the [lb](crate::lb) (load-balancing) module
 ##
 ## This feature will include and export `pingora_load_balancing::prelude::*`
-lb = ["pingora-load-balancing", "proxy"]
+lb = ["dep:pingora-load-balancing", "proxy"]
 
 ## Include the [cache](crate::cache) module
 ##
@@ -120,3 +120,4 @@ openssl_derived = ["any_tls"]
 any_tls = []
 patched_http1 = ["pingora-core/patched_http1"]
 document-features = ["dep:document-features", "proxy", "lb", "cache", "time", "sentry"]
+quic = ["pingora-core/quic", "dep:pingora-load-balancing", "pingora-load-balancing/quic"]
