@@ -290,10 +290,10 @@ impl HttpSession {
 
     /// Return a digest of the request including the method and path.
     pub fn request_summary(&self) -> String {
-        let method = self.request_header.method().to_string();
+        let method = self.request_header.method.as_str();
         let path = self
             .request_header
-            .uri()
+            .uri
             .path_and_query()
             .map(|pq| pq.as_str())
             .unwrap_or("/");

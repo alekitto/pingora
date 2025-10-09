@@ -1,26 +1,41 @@
-# QUIC service
+# HTTP/3 and QUIC services
 
-Pingora's QUIC service offers a UDP listener built on top of [`quiche`](https://github.com/cloudflare/quiche) that terminates
-incoming connections and forwards them to a backend selected through the `LoadBalancer`. This guide walks through prerequisites,
-certificate and listener configuration, and the operational limits to keep in mind.
+Pingora ships two complementary QUIC building blocks powered by
+[`quiche`](https://github.com/cloudflare/quiche):
+
+* the **HTTP/3 service**, which terminates QUIC handshakes, upgrades them to
+  HTTP/3 sessions, and dispatches them to an [`HttpServerApp`] implementation;
+* the **generic QUIC service**, which accepts QUIC connections, picks an
+  upstream through the load balancer, and forwards packets on behalf of the
+  selected backend.
+
+This guide walks through feature flags, certificate requirements, listener and
+backend configuration, and the fallback story for HTTP/1.1 / HTTP/2 clients.
 
 ## Prerequisites and feature flags
 
-* Support is available only when compiling with the `quic` feature, which links `quiche` into both `pingora-core` and
-  `pingora-load-balancing`.
-* To use the load balancer recipes enable the `lb` feature as well when running examples or binaries.
-* The listener requires TLS 1.3 certificates in PEM format.
+* Compile the workspace with the `quic` feature to pull in `quiche` support for
+  both `pingora-core` and `pingora-proxy`.
+* To run examples or the proxy helpers alongside QUIC, enable the `lb` feature
+  (for load balancing) and whichever TLS backend you rely on (`rustls`,
+  `boringssl`, or `openssl_derived`).
+* QUIC listeners require TLS 1.3 certificates and private keys encoded as PEM
+  files. Provide the full certificate chain your clients expect.
 
-Example command to run the example binary with both features enabled:
+The `quic_lb` example can be launched with the required features enabled:
 
 ```bash
-cargo run -p pingora --example quic_lb --features "lb quic"
+cargo run -p pingora --example quic_lb --features "lb quic" -- \
+    --listen 0.0.0.0:4433 \
+    --backend quic://10.0.0.10:4433 --backend quic://10.0.0.11:4433
 ```
 
-## Transport and certificate configuration
+## Configuring HTTP/3 listeners
 
-Building a `ServerConfig` from `TransportConfigBuilder` lets you load a PEM certificate and private key and declare the ALPN
-protocols announced to clients. After creation you can explicitly enable QUIC datagram support:
+An HTTP/3 listener is backed by an `Http3Service` and one or more UDP
+endpoints. Build a `ServerConfig` with `TransportConfigBuilder`, load the PEM
+certificate and key, advertise the `h3` ALPN token, and enable datagram support
+if your application depends on it:
 
 ```rust
 use pingora_core::protocols::quic::TransportConfigBuilder;
@@ -29,67 +44,82 @@ let mut builder = TransportConfigBuilder::new()?;
 builder = builder
     .load_cert_chain_from_pem_file(cert_path)?
     .load_priv_key_from_pem_file(key_path)?
-    .application_protos(&[b"h3"])?
     .verify_peer(false);
+let builder = builder
+    .application_protos(&[b"h3"])?;
 let server_config = builder.build_server()?;
 server_config
     .transport()
     .with_config_mut(|cfg| cfg.enable_dgram(true, 32, 32))?;
+
+let mut service = Http3Service::new("http3 frontend", "0.0.0.0:443", server_config, app);
+service.set_alpn_h3()?;
 ```
 
-Use the same approach for client configuration in tests or QUIC connectors. The keys must match what backends present and the
-security requirements of your environment.
+Existing listening services created through `Service::with_listeners` can attach
+an HTTP/3 endpoint via `add_http3_endpoint`, letting the same application logic
+handle HTTP/1.x, HTTP/2, and HTTP/3 side-by-side.
 
-## LoadBalancer integration
+## Configuring QUIC backends
 
-`LoadBalancer` implements the `QuicBackendSelector` trait, so you can pass it directly into the service constructor. QUIC
-backends are declared with the `quic://` prefix and keep the same properties (weight, metadata) as other supported protocols.
+The generic `QuicService` integrates with `LoadBalancer::select_with_protocol`
+to pick an upstream endpoint for each QUIC connection. Declare QUIC backends
+with the `quic://` URI prefix; they accept the same weight and metadata options
+as TCP backends:
 
 ```rust
 use pingora_load_balancing::{Backend, LoadBalancer};
 use pingora_load_balancing::selection::RoundRobin;
-use pingora_core::services::quic::QuicService;
+use pingora_core::services::quic::{QuicBackendSelector, QuicService};
 
 let backends = vec![Backend::new_quic("quic://127.0.0.1:9443")?];
 let lb = LoadBalancer::<RoundRobin>::try_from_iter(backends)?;
 let selector = std::sync::Arc::new(lb) as std::sync::Arc<dyn QuicBackendSelector>;
 
-let mut service = QuicService::new("QUIC LB", listen_addr, server_config, selector);
+let mut service = QuicService::new("quic-forwarder", "0.0.0.0:4433", server_config, selector);
 service.set_max_backend_iterations(8);
 ```
 
-You can customize UDP socket options and receive/transmit queue limits to align with the expected load.
+You can tune queue limits and UDP socket options to align with your expected
+traffic profile.
 
-## Full example
+## Fallback behaviour
 
-The `quic_lb` example shows how to start a Pingora server that listens on QUIC, populates a round-robin load balancer, and wires
-the backend selection into the service. The default certificate and key reuse the test material included in the repository and
-can be overridden at the command line.
+Clients that cannot complete a QUIC handshake (for example because of blocked
+UDP ports) should automatically fall back to your HTTP/1.1 or HTTP/2 endpoints.
+Keep TCP listeners configured on the same service and make sure TLS ALPN
+advertises the right combinations. When selecting upstreams through the
+load-balancer, call `LoadBalancer::select_with_protocol` to attempt a QUIC pick
+first, then fall back to `BackendProtocol::Tcp` if no healthy QUIC backend is
+available. Integration tests under `pingora-core/tests/http3_service.rs` and
+`pingora-proxy/tests/test_http3.rs` illustrate the handshake path and the
+fallback to HTTP/1.1 once UDP is unavailable.
 
-```bash
-cargo run -p pingora --example quic_lb \
-    --features "lb quic" \
-    -- --listen 0.0.0.0:4433 \
-    --backend quic://10.0.0.10:4433 --backend quic://10.0.0.11:4433
-```
+## Health checks
 
-## Health checks and fallback
+Built-in checkers do not yet support native QUIC probes. A health check invoked
+against a QUIC backend returns the `quic_health_check_unavailable` error. Use an
+external monitoring system to update backend state or run lightweight TCP
+checks against the same pool to keep lifecycle management aligned.
 
-Built-in checkers do not yet support native QUIC probes: running a health check on a QUIC backend returns the
-`quic_health_check_unavailable` error. You can:
+## Migration notes
 
-* Delegate monitoring to an external system (for example Prometheus or an orchestrator) that updates backend state through
-  dynamic discovery.
-* Run lightweight UDP/TCP reachability checks against the same hosts to keep lifecycle management aligned.
+Earlier releases only exposed an L4 QUIC forwarder. Upgrading to the HTTP/3
+service requires a few configuration changes:
 
-When a QUIC backend becomes unavailable you can call `LoadBalancer::select_with_protocol` to fall back to existing TCP endpoints
-(HTTP/1.1 or HTTP/2), or instruct the application to degrade traffic toward a traditional HTTP service while preserving client
-tracking.
+* Update listener definitions to add `Http3Service` or call
+  `Service::add_http3_endpoint` alongside your existing TCP/TLS endpoints.
+* Provide full TLS 1.3 certificate chains. QUIC handshakes fail fast when
+  intermediate certificates are missing.
+* Ensure the `h3` ALPN token is advertised from both the QUIC listener and any
+  alternative TCP/TLS endpoints that should offer HTTP/3 via Alt-Svc.
+* Review firewall policies: the HTTP/3 listener binds a UDP socket and requires
+  bidirectional UDP reachability in addition to any TCP listeners used for
+  fallback.
+* CI should execute the QUIC-aware tests (`cargo test --features quic`)
+  whenever new code paths are introduced, because `quiche` pulls in additional
+  native dependencies.
 
-## Known limitations
-
-* The service terminates QUIC transport and delegates application logic (HTTP/3, gRPC, etc.) to the selected backend; there is
-  no direct integration with Pingora's built-in HTTP handlers yet.
-* First-party QUIC health checks are not available.
-* Configuration requires PEM-formatted TLS certificates readable from disk.
-* Enabling the `quic` feature pulls in the `quiche` crate, which may require a compatible C toolchain on the build system.
+The existing L4 service and the new HTTP/3 listener can run side-by-side. Use
+them in tandem while migrating traffic or to keep bespoke QUIC backends
+available for specialised workloads.

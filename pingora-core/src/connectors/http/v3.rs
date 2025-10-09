@@ -1,3 +1,5 @@
+#![cfg(feature = "http3_client")]
+
 use std::sync::Arc;
 
 use pingora_error::{Error, ErrorType, Result};
@@ -42,7 +44,7 @@ impl Connector {
             &self.h3_config,
         )
         .map_err(|err| {
-            Error::new(
+            Error::explain(
                 H3_ERROR,
                 format!("failed to start HTTP/3 connection: {err}"),
             )

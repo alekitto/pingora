@@ -395,6 +395,13 @@ where
             }
         };
 
+        if let Err(err) = transport.recv(&mut datagram) {
+            debug!("Failed to process QUIC datagram: {err}");
+            return;
+        }
+
+        self.flush_pending_datagrams(endpoint, &mut transport).await;
+
         let h3_config = match quiche::h3::Config::new() {
             Ok(cfg) => cfg,
             Err(err) => {
@@ -412,7 +419,30 @@ where
                 }
             };
 
-        // Flush any handshake packets produced by the initial accept.
+        self.flush_pending_datagrams(endpoint, &mut transport).await;
+
+        // Create a placeholder HTTP/3 session and hand it to the application.
+        let digest = Arc::new(Digest::default());
+        let session = HttpSession::placeholder(transport, h3_conn, digest);
+        let app = Arc::clone(&self.app);
+
+        current_handle().spawn(async move {
+            let _ = app
+                .process_new_http(ServerSession::new_http3(session), &shutdown)
+                .await;
+        });
+    }
+}
+
+impl<A> Http3Worker<A>
+where
+    A: HttpServerApp + Send + Sync + 'static,
+{
+    async fn flush_pending_datagrams(
+        &self,
+        endpoint: &Endpoint,
+        transport: &mut crate::protocols::quic::Connection,
+    ) {
         for _ in 0..self.send_queue_limit {
             match transport.send() {
                 Ok(datagram) => {
@@ -428,16 +458,5 @@ where
                 }
             }
         }
-
-        // Create a placeholder HTTP/3 session and hand it to the application.
-        let digest = Arc::new(Digest::default());
-        let session = HttpSession::placeholder(transport, h3_conn, digest);
-        let app = Arc::clone(&self.app);
-
-        current_handle().spawn(async move {
-            let _ = app
-                .process_new_http(ServerSession::new_http3(session), &shutdown)
-                .await;
-        });
     }
 }

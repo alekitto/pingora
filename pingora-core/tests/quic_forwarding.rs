@@ -1,4 +1,4 @@
-#![cfg(feature = "quic")]
+#![cfg(all(feature = "quic", feature = "http3_client"))]
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -28,8 +28,7 @@ fn build_server_config(cert: &str, key: &str) -> ServerConfig {
     let server_config = builder.build_server().expect("build server config");
     server_config
         .transport()
-        .with_config_mut(|cfg| cfg.enable_dgram(true, 32, 32))
-        .expect("enable server datagrams");
+        .with_config_mut(|cfg| cfg.enable_dgram(true, 32, 32));
     server_config
 }
 
@@ -42,8 +41,7 @@ fn build_client_config() -> ClientConfig {
     let client_config = builder.build_client();
     client_config
         .transport()
-        .with_config_mut(|cfg| cfg.enable_dgram(true, 32, 32))
-        .expect("enable client datagrams");
+        .with_config_mut(|cfg| cfg.enable_dgram(true, 32, 32));
     client_config
 }
 

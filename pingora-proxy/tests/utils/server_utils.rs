@@ -34,6 +34,8 @@ use pingora_cache::{
 };
 use pingora_core::apps::{HttpServerApp, HttpServerOptions};
 use pingora_core::modules::http::compression::ResponseCompression;
+#[cfg(feature = "quic")]
+use pingora_core::protocols::quic::TransportConfigBuilder;
 use pingora_core::protocols::{
     http::error_resp::gen_error_response, l4::socket::SocketAddr, Digest,
 };
@@ -689,6 +691,29 @@ fn test_main() {
     let mut proxy_service_http =
         pingora_proxy::http_proxy_service(&my_server.configuration, ExampleProxyHttp {});
     proxy_service_http.add_tcp("0.0.0.0:6147");
+    #[cfg(feature = "quic")]
+    {
+        let cert_path = format!("{}/tests/keys/server.crt", env!("CARGO_MANIFEST_DIR"));
+        let key_path = format!("{}/tests/keys/key.pem", env!("CARGO_MANIFEST_DIR"));
+        let mut builder = TransportConfigBuilder::new().expect("create QUIC config builder");
+        builder = builder
+            .load_cert_chain_from_pem_file(&cert_path)
+            .expect("load QUIC certificate chain")
+            .load_priv_key_from_pem_file(&key_path)
+            .expect("load QUIC private key")
+            .verify_peer(false);
+        let builder = builder
+            .application_protos(&[b"h3"])
+            .expect("set HTTP/3 ALPN");
+        let server_config = builder.build_server().expect("build QUIC server config");
+        let _ = server_config
+            .transport()
+            .with_config_mut(|cfg| cfg.enable_dgram(true, 32, 32));
+        proxy_service_http
+            .add_http3_endpoint("0.0.0.0:6154", server_config)
+            .set_alpn_h3()
+            .expect("configure HTTP/3 listener");
+    }
     #[cfg(unix)]
     proxy_service_http.add_uds("/tmp/pingora_proxy.sock", None);
 
