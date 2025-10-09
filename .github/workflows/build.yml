@@ -41,6 +41,10 @@ jobs:
       - name: Run cargo test
         run: cargo test --verbose --lib --bins --tests --no-fail-fast
 
+      - name: Run cargo test with QUIC feature
+        if: matrix.toolchain == 'nightly'
+        run: cargo test --verbose --workspace --tests --no-fail-fast --features quic
+
       # Need to run doc tests separately.
       # (https://github.com/rust-lang/cargo/issues/6669)
       - name: Run cargo doc test

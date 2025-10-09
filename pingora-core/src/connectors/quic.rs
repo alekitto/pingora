@@ -1,4 +1,4 @@
-#![cfg(feature = "quic")]
+#![cfg(feature = "http3_client")]
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
@@ -77,7 +77,7 @@ impl QuicConnector {
         }
     }
 
-    fn quic_options<P: Peer>(&self, peer: &P) -> Option<&QuicTransportOptions> {
+    fn quic_options<'a, P: Peer>(&self, peer: &'a P) -> Option<&'a QuicTransportOptions> {
         peer.quic_transport_options()
     }
 
@@ -121,7 +121,7 @@ impl QuicConnector {
                     .transport()
                     .with_config_mut(|cfg| cfg.set_application_protos(&protos));
                 if let Err(err) = result {
-                    return Err(Error::new(
+                    return Err(Error::explain(
                         InternalError,
                         format!("failed to configure QUIC ALPN: {err}"),
                     ));
@@ -132,7 +132,7 @@ impl QuicConnector {
         let scid_bytes = match options.and_then(|opt| opt.source_connection_id.clone()) {
             Some(scid) if scid.len() <= quiche::MAX_CONN_ID_LEN => scid,
             Some(scid) => {
-                return Err(Error::new(
+                return Err(Error::explain(
                     InternalError,
                     format!(
                         "QUIC source connection id length {} exceeds maximum {}",
@@ -167,16 +167,6 @@ impl QuicConnector {
             .connect(server_name, &scid, local_addr, remote_addr)
             .or_err(InternalError, "failed to establish QUIC connection")?;
 
-        if let Some(opt) = options {
-            if let Some(token) = &opt.zero_rtt_token {
-                if !token.is_empty() {
-                    if let Err(err) = connection.inner_mut().set_token(token) {
-                        debug!("failed to set QUIC 0-RTT token: {err}");
-                    }
-                }
-            }
-        }
-
         let mut upstream = QuicUpstream {
             endpoint,
             connection,
@@ -202,7 +192,7 @@ impl QuicConnector {
                 }
                 Err(quiche::Error::Done) => break,
                 Err(err) => {
-                    return Err(Error::new(
+                    return Err(Error::explain(
                         InternalError,
                         format!("quiche send error during connect: {err}"),
                     ));

@@ -312,15 +312,17 @@ In this process, The old running server will wait and hand over its listening so
 
 From a client's perspective, the service is always running because the listening socket is never closed.
 
-## Balancing QUIC traffic end-to-end
+## Balancing HTTP/3 and QUIC traffic end-to-end
 
-The `quic_lb` example combines the QUIC listener with the load-balancing helpers and can be used as a starting point for HTTP/3 or custom QUIC workloads. Build it with both the `lb` and `quic` features enabled so that the QUIC service and the load balancer share the same runtime:
+Pingora can now terminate HTTP/3 on the edge and fall back to HTTP/1.1 or HTTP/2 when UDP transport is unavailable. Combine the `Http3Service` with the load-balancing helpers by enabling both the `lb` and `quic` features so that the QUIC service and the load balancer share the same runtime:
 
 ```bash
 cargo run -p pingora --example quic_lb --features "lb quic" -- \
     --listen 0.0.0.0:4433 \
     --backend quic://10.0.0.10:4433 --backend quic://10.0.0.11:4433
 ```
+
+Add an HTTP/3 listener to an existing service with `Service::add_http3_endpoint("0.0.0.0:443", server_config)` and keep the TCP/TLS endpoints in place so legacy clients can downgrade automatically. Integration tests under `pingora-core/tests/http3_service.rs` and `pingora-proxy/tests/test_http3.rs` demonstrate a running QUIC handshake and the HTTP fallback path.
 
 By default the example reuses the self-signed certificates stored under `pingora/tests/keys/`. Override `--cert` and `--key` to point to production-ready TLS material and adjust `--alpn` if you need to advertise more than `h3`.
 

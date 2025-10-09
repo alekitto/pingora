@@ -10,6 +10,7 @@ Pingora is battle tested as it has been serving more than 40 million Internet re
 ## Feature highlights
 * Async Rust: fast and reliable
 * HTTP 1/2 end to end proxy
+* HTTP/3 over QUIC frontends with TCP fallbacks (`--features quic`)
 * TLS over OpenSSL, BoringSSL or rustls(experimental).
 * gRPC and websocket proxying
 * Graceful reload
@@ -23,7 +24,8 @@ Pingora is battle tested as it has been serving more than 40 million Internet re
 
 # Getting started
 
-See our [quick starting guide](./docs/quick_start.md) to see how easy it is to build a load balancer.
+See our [quick starting guide](./docs/quick_start.md) to see how easy it is to build a load balancer. The guide now covers
+enabling HTTP/3 listeners and keeping HTTP/1.1/HTTP/2 fallbacks side-by-side.
 
 Our [user guide](./docs/user_guide/index.md) covers more topics such as how to configure and run Pingora servers, as well as how to build custom HTTP servers and proxy logic on top of Pingora's framework.
 
@@ -73,6 +75,14 @@ libraries that must be satisfied in order to build them:
 
 * Make sure that [Clang] is installed on your system (for boringssl)
 * Make sure that [Perl 5] is installed on your system (for openssl)
+* Enable the `quic` feature only on hosts that can build `quiche` (requires a C toolchain, `cmake`, `pkg-config`, and UDP
+  sockets for integration tests)
+
+When developing QUIC code paths run the extended test suite:
+
+```bash
+cargo test --features quic --workspace --tests
+```
 
 [Clang]:https://clang.llvm.org/
 [Perl 5]:https://www.perl.org/

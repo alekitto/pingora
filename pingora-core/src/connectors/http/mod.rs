@@ -17,20 +17,20 @@
 use crate::connectors::ConnectorOptions;
 use crate::protocols::http::client::HttpSession;
 use crate::upstreams::peer::Peer;
-#[cfg(feature = "quic")]
+#[cfg(feature = "http3_client")]
 use log::debug;
 use pingora_error::Result;
 use std::time::Duration;
 
 pub mod v1;
 pub mod v2;
-#[cfg(feature = "quic")]
+#[cfg(feature = "http3_client")]
 pub mod v3;
 
 pub struct Connector {
     h1: v1::Connector,
     h2: v2::Connector,
-    #[cfg(feature = "quic")]
+    #[cfg(feature = "http3_client")]
     h3: v3::Connector,
 }
 
@@ -39,7 +39,7 @@ impl Connector {
         Connector {
             h1: v1::Connector::new(options.clone()),
             h2: v2::Connector::new(options.clone()),
-            #[cfg(feature = "quic")]
+            #[cfg(feature = "http3_client")]
             h3: v3::Connector::new(options),
         }
     }
@@ -58,7 +58,7 @@ impl Connector {
         let h1_only = peer
             .get_peer_options()
             .map_or(true, |o| o.alpn.get_max_http_version() == 1);
-        #[cfg(feature = "quic")]
+        #[cfg(feature = "http3_client")]
         if !h1_only {
             if let Some(_options) = peer.quic_transport_options() {
                 if let Some(h3) = self.h3.reused_http_session(peer).await {
@@ -118,7 +118,7 @@ impl Connector {
         match session {
             HttpSession::H1(h1) => self.h1.release_http_session(h1, peer, idle_timeout).await,
             HttpSession::H2(h2) => self.h2.release_http_session(h2, peer, idle_timeout),
-            #[cfg(feature = "quic")]
+            #[cfg(feature = "http3_client")]
             HttpSession::H3(h3) => {
                 self.h3.release_http_session(h3, peer).await;
             }

@@ -124,20 +124,6 @@ impl<A> Service<A> {
         self.listeners.add_address(addr);
     }
 
-    /// Add an HTTP/3 endpoint backed by QUIC to this service.
-    #[cfg(feature = "quic")]
-    pub fn add_http3_endpoint(
-        &mut self,
-        listen_addr: impl Into<String>,
-        server_config: ServerConfig,
-    ) -> &mut Http3Endpoint {
-        self.http3_endpoints
-            .push(Http3Endpoint::new(listen_addr, server_config));
-        self.http3_endpoints
-            .last_mut()
-            .expect("just pushed an HTTP/3 endpoint")
-    }
-
     /// Get a reference to the application inside this service
     pub fn app_logic(&self) -> Option<&A> {
         self.app_logic.as_ref()
@@ -236,8 +222,30 @@ impl<A: ServerApp + Send + Sync + 'static> Service<A> {
     }
 }
 
+#[cfg(feature = "quic")]
+impl<A> Service<A>
+where
+    A: crate::apps::HttpServerApp + Send + Sync + 'static,
+{
+    /// Add an HTTP/3 endpoint backed by QUIC to this service.
+    pub fn add_http3_endpoint(
+        &mut self,
+        listen_addr: impl Into<String>,
+        server_config: ServerConfig,
+    ) -> &mut Http3Endpoint {
+        self.http3_endpoints
+            .push(Http3Endpoint::new(listen_addr, server_config));
+        self.http3_endpoints
+            .last_mut()
+            .expect("just pushed an HTTP/3 endpoint")
+    }
+}
+
 #[async_trait]
-impl<A: ServerApp + Send + Sync + 'static> ServiceTrait for Service<A> {
+impl<A> ServiceTrait for Service<A>
+where
+    A: crate::apps::HttpServerApp + Send + Sync + 'static,
+{
     async fn start_service(
         &mut self,
         #[cfg(unix)] fds: Option<ListenFds>,
