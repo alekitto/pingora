@@ -27,7 +27,7 @@ use log::{debug, error, info, warn};
 use pingora_runtime::current_handle;
 use tokio::time::{sleep, Duration};
 
-use crate::apps::HttpServerApp;
+use crate::apps::{HttpServerApp, HttpServerAppDyn};
 use crate::listeners::{
     ListenerEndpoint, ListenerEndpointBuilder, ServerAddress, UdpSocketOptions,
 };
@@ -104,18 +104,15 @@ impl Http3Endpoint {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn spawn_workers<A>(
+    pub(crate) async fn spawn_workers(
         &self,
         runtime: &tokio::runtime::Handle,
         #[cfg_attr(not(unix), allow(unused_variables))] fds: EndpointFds,
         shutdown: ShutdownWatch,
         listeners_per_fd: usize,
-        app: Arc<A>,
+        app: Arc<dyn HttpServerAppDyn>,
         service_name: &str,
-    ) -> Vec<tokio::task::JoinHandle<()>>
-    where
-        A: HttpServerApp + Send + Sync + 'static,
-    {
+    ) -> Vec<tokio::task::JoinHandle<()>> {
         let listener = {
             let builder = self.builder();
             #[cfg(unix)]
@@ -272,13 +269,14 @@ where
         let mut tasks = Vec::new();
 
         for endpoint in &self.endpoints {
+            let app: Arc<dyn HttpServerAppDyn> = Arc::new(Arc::clone(&self.app));
             let mut endpoint_tasks = endpoint
                 .spawn_workers(
                     &runtime,
                     http3_fds.clone(),
                     shutdown.clone(),
                     listeners_per_fd,
-                    Arc::clone(&self.app),
+                    app,
                     &self.name,
                 )
                 .await;
@@ -301,20 +299,18 @@ where
     }
 }
 
-pub(crate) struct Http3Worker<A>
-where
-    A: HttpServerApp + Send + Sync + 'static,
-{
+pub(crate) struct Http3Worker {
     server_config: ServerConfig,
-    app: Arc<A>,
+    app: Arc<dyn HttpServerAppDyn>,
     send_queue_limit: usize,
 }
 
-impl<A> Http3Worker<A>
-where
-    A: HttpServerApp + Send + Sync + 'static,
-{
-    fn new(server_config: ServerConfig, app: Arc<A>, send_queue_limit: usize) -> Self {
+impl Http3Worker {
+    fn new(
+        server_config: ServerConfig,
+        app: Arc<dyn HttpServerAppDyn>,
+        send_queue_limit: usize,
+    ) -> Self {
         Self {
             server_config,
             app,
@@ -426,16 +422,13 @@ where
 
         current_handle().spawn(async move {
             let _ = app
-                .process_new_http(ServerSession::new_http3(session), &shutdown)
+                .process_new_http_dyn(ServerSession::new_http3(session), &shutdown)
                 .await;
         });
     }
 }
 
-impl<A> Http3Worker<A>
-where
-    A: HttpServerApp + Send + Sync + 'static,
-{
+impl Http3Worker {
     async fn flush_pending_datagrams(
         &self,
         endpoint: &Endpoint,

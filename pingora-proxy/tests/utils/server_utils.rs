@@ -704,7 +704,7 @@ fn test_main() {
             .application_protos(&[b"h3"])
             .expect("set HTTP/3 ALPN");
         let server_config = builder.build_server().expect("build QUIC server config");
-        let _ = server_config
+        server_config
             .transport()
             .with_config_mut(|cfg| cfg.enable_dgram(true, 32, 32));
         proxy_service_http
