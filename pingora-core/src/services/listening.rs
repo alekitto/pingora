@@ -30,7 +30,7 @@ use crate::services::http3::Http3Endpoint;
 use crate::services::Service as ServiceTrait;
 
 use async_trait::async_trait;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use pingora_error::Result;
 use pingora_runtime::current_handle;
 use pingora_timeout::timeout;
@@ -237,7 +237,7 @@ where
 #[async_trait]
 impl<A> ServiceTrait for Service<A>
 where
-    A: crate::apps::HttpServerApp + Send + Sync + 'static,
+    A: ServerApp + Send + Sync + 'static,
 {
     async fn start_service(
         &mut self,
@@ -265,6 +265,7 @@ where
         let app_logic = Arc::new(app_logic);
 
         let mut handlers = Vec::new();
+        let http_app_logic = app_logic.as_http_server_app_dyn();
 
         endpoints.into_iter().for_each(|endpoint| {
             for _ in 0..listeners_per_fd {
@@ -285,18 +286,27 @@ where
             #[cfg(not(unix))]
             let http3_fds = ();
 
-            for endpoint in &self.http3_endpoints {
-                let mut tasks = endpoint
-                    .spawn_workers(
-                        &runtime,
-                        http3_fds.clone(),
-                        shutdown.clone(),
-                        listeners_per_fd,
-                        Arc::clone(&app_logic),
-                        &self.name,
-                    )
-                    .await;
-                handlers.append(&mut tasks);
+            if !self.http3_endpoints.is_empty() {
+                if let Some(http_app_logic) = http_app_logic {
+                    for endpoint in &self.http3_endpoints {
+                        let mut tasks = endpoint
+                            .spawn_workers(
+                                &runtime,
+                                http3_fds.clone(),
+                                shutdown.clone(),
+                                listeners_per_fd,
+                                Arc::clone(&http_app_logic),
+                                &self.name,
+                            )
+                            .await;
+                        handlers.append(&mut tasks);
+                    }
+                } else {
+                    warn!(
+                        "Service `{}` configured HTTP/3 endpoints but application does not implement HttpServerApp",
+                        self.name
+                    );
+                }
             }
         }
 

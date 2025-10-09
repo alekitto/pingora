@@ -55,6 +55,11 @@ pub trait ServerApp {
 
     /// This callback will be called once after the service stops listening to its endpoints.
     async fn cleanup(&self) {}
+
+    /// Returns an [`Arc`] view of this application as an HTTP server if supported.
+    fn as_http_server_app_dyn(self: &Arc<Self>) -> Option<Arc<dyn HttpServerAppDyn>> {
+        None
+    }
 }
 #[non_exhaustive]
 #[derive(Default)]
@@ -132,6 +137,15 @@ pub trait HttpServerApp {
     }
 
     async fn http_cleanup(&self) {}
+}
+
+#[async_trait]
+pub trait HttpServerAppDyn: Send + Sync {
+    async fn process_new_http_dyn(
+        &self,
+        session: ServerSession,
+        shutdown: &ShutdownWatch,
+    ) -> Option<ReusedHttpStream>;
 }
 
 #[async_trait]
@@ -248,5 +262,23 @@ where
 
     async fn cleanup(&self) {
         self.http_cleanup().await;
+    }
+
+    fn as_http_server_app_dyn(self: &Arc<Self>) -> Option<Arc<dyn HttpServerAppDyn>> {
+        Some(Arc::new(Arc::clone(self)))
+    }
+}
+
+#[async_trait]
+impl<A> HttpServerAppDyn for Arc<A>
+where
+    A: HttpServerApp + Send + Sync + 'static,
+{
+    async fn process_new_http_dyn(
+        &self,
+        session: ServerSession,
+        shutdown: &ShutdownWatch,
+    ) -> Option<ReusedHttpStream> {
+        HttpServerApp::process_new_http(self, session, shutdown).await
     }
 }
