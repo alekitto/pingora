@@ -1,0 +1,2 @@
+[registries.gitea]
+index = "sparse+https://gitea.latenightdev.net/api/packages/alekitto/cargo/"

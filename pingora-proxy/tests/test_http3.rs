@@ -24,10 +24,7 @@ fn build_client_config() -> ClientConfig {
     client_config
 }
 
-async fn flush_connection(
-    endpoint: &Endpoint,
-    connection: &mut Connection,
-) {
+async fn flush_connection(endpoint: &Endpoint, connection: &mut Connection) {
     loop {
         match connection.send() {
             Ok(packet) => {
@@ -48,10 +45,7 @@ async fn http3_frontend_completes_handshake_and_tcp_fallback() {
         .await
         .expect("bind client socket");
     let client_endpoint = Endpoint::new(client_socket).expect("wrap client endpoint");
-    let client_addr = client_endpoint
-        .socket()
-        .local_addr()
-        .expect("client addr");
+    let client_addr = client_endpoint.socket().local_addr().expect("client addr");
 
     let mut scid = [0u8; quiche::MAX_CONN_ID_LEN];
     OsRng.fill_bytes(&mut scid);

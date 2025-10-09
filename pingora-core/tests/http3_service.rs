@@ -122,10 +122,7 @@ async fn http3_service_accepts_handshake_and_notifies_app() {
         .await
         .expect("bind client socket");
     let client_endpoint = Endpoint::new(client_socket).expect("wrap client endpoint");
-    let client_addr = client_endpoint
-        .socket()
-        .local_addr()
-        .expect("client addr");
+    let client_addr = client_endpoint.socket().local_addr().expect("client addr");
 
     let mut scid = [0u8; quiche::MAX_CONN_ID_LEN];
     OsRng.fill_bytes(&mut scid);
