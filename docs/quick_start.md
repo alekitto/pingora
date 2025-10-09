@@ -312,6 +312,18 @@ In this process, The old running server will wait and hand over its listening so
 
 From a client's perspective, the service is always running because the listening socket is never closed.
 
+## Balancing QUIC traffic end-to-end
+
+The `quic_lb` example combines the QUIC listener with the load-balancing helpers and can be used as a starting point for HTTP/3 or custom QUIC workloads. Build it with both the `lb` and `quic` features enabled so that the QUIC service and the load balancer share the same runtime:
+
+```bash
+cargo run -p pingora --example quic_lb --features "lb quic" -- \
+    --listen 0.0.0.0:4433 \
+    --backend quic://10.0.0.10:4433 --backend quic://10.0.0.11:4433
+```
+
+By default the example reuses the self-signed certificates stored under `pingora/tests/keys/`. Override `--cert` and `--key` to point to production-ready TLS material and adjust `--alpn` if you need to advertise more than `h3`.
+
 ## Full examples
 
 The full code for this example is available in this repository under
