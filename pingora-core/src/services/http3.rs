@@ -382,7 +382,7 @@ where
         let scid = quiche::ConnectionId::from_ref(header.dcid.as_ref());
         let odcid = Some(quiche::ConnectionId::from_ref(header.scid.as_ref()));
 
-        let mut connection = match self.server_config.accept(
+        let mut transport = match self.server_config.accept(
             &scid,
             odcid.as_ref(),
             datagram.recv_info().to,
@@ -404,7 +404,7 @@ where
         };
 
         let h3_conn =
-            match quiche::h3::Connection::with_transport(connection.inner_mut(), &h3_config) {
+            match quiche::h3::Connection::with_transport(transport.inner_mut(), &h3_config) {
                 Ok(conn) => conn,
                 Err(err) => {
                     warn!("Failed to create HTTP/3 connection: {err}");
@@ -414,7 +414,7 @@ where
 
         // Flush any handshake packets produced by the initial accept.
         for _ in 0..self.send_queue_limit {
-            match connection.send() {
+            match transport.send() {
                 Ok(datagram) => {
                     if let Err(err) = endpoint.send(&datagram).await {
                         warn!("Failed to send QUIC datagram: {err}");
@@ -431,7 +431,7 @@ where
 
         // Create a placeholder HTTP/3 session and hand it to the application.
         let digest = Arc::new(Digest::default());
-        let session = HttpSession::placeholder(h3_conn, digest);
+        let session = HttpSession::placeholder(transport, h3_conn, digest);
         let app = Arc::clone(&self.app);
 
         current_handle().spawn(async move {
