@@ -35,81 +35,208 @@ pub mod noop_tls;
 #[cfg(not(feature = "any_tls"))]
 pub use noop_tls::*;
 
-/// The protocol for Application-Layer Protocol Negotiation
-#[derive(Hash, Clone, Debug)]
-pub enum ALPN {
-    /// Prefer HTTP/1.1 only
-    H1,
-    /// Prefer HTTP/2 only
-    H2,
-    /// Prefer HTTP/2 over HTTP/1.1
-    H2H1,
+/// Supported HTTP application protocols for ALPN/QUIC negotiation.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum HttpProtocol {
+    /// HTTP/1.1
+    Http1,
+    /// HTTP/2
+    Http2,
+    /// HTTP/3
+    Http3,
 }
 
-impl std::fmt::Display for ALPN {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl HttpProtocol {
+    fn as_str(&self) -> &'static str {
         match self {
-            ALPN::H1 => write!(f, "H1"),
-            ALPN::H2 => write!(f, "H2"),
-            ALPN::H2H1 => write!(f, "H2H1"),
+            HttpProtocol::Http1 => "H1",
+            HttpProtocol::Http2 => "H2",
+            HttpProtocol::Http3 => "H3",
+        }
+    }
+
+    fn http_version(&self) -> u8 {
+        match self {
+            HttpProtocol::Http1 => 1,
+            HttpProtocol::Http2 => 2,
+            HttpProtocol::Http3 => 3,
+        }
+    }
+
+    #[cfg(any(feature = "openssl_derived", feature = "rustls"))]
+    fn tls_wire(&self) -> Option<&'static [u8]> {
+        match self {
+            HttpProtocol::Http1 => Some(b"http/1.1"),
+            HttpProtocol::Http2 => Some(b"h2"),
+            // HTTP/3 is negotiated via QUIC, not TLS
+            HttpProtocol::Http3 => None,
+        }
+    }
+
+    #[cfg(feature = "quic")]
+    fn quic_wire(&self) -> &'static [u8] {
+        match self {
+            HttpProtocol::Http1 => b"http/1.1",
+            HttpProtocol::Http2 => b"h2",
+            HttpProtocol::Http3 => b"h3",
         }
     }
 }
 
+/// The protocol preference list for Application-Layer Protocol Negotiation
+#[derive(Hash, Clone, Debug, PartialEq, Eq)]
+pub struct ALPN {
+    order: Vec<HttpProtocol>,
+}
+
 impl ALPN {
-    /// Create a new ALPN according to the `max` and `min` version constraints
+    /// Create a new ALPN preference from an explicit ordering.
+    pub fn with_preference(order: Vec<HttpProtocol>) -> Self {
+        assert!(!order.is_empty(), "ALPN preference list cannot be empty");
+        Self { order }
+    }
+
+    /// Create a new ALPN according to the `max` and `min` version constraints.
     pub fn new(max: u8, min: u8) -> Self {
-        if max == 1 {
-            ALPN::H1
-        } else if min == 2 {
-            ALPN::H2
-        } else {
-            ALPN::H2H1
+        let mut order = Vec::new();
+        if max < min {
+            return Self::with_preference(vec![HttpProtocol::Http1]);
         }
+        for version in (min..=max).rev() {
+            match version {
+                1 => order.push(HttpProtocol::Http1),
+                2 => order.push(HttpProtocol::Http2),
+                3 => order.push(HttpProtocol::Http3),
+                _ => {}
+            }
+        }
+        if order.is_empty() {
+            order.push(HttpProtocol::Http1);
+        }
+        Self::with_preference(order)
+    }
+
+    /// Convenience constructor for HTTP/1.1 only.
+    pub fn h1() -> Self {
+        Self::with_preference(vec![HttpProtocol::Http1])
+    }
+
+    /// Convenience constructor for HTTP/2 only.
+    pub fn h2() -> Self {
+        Self::with_preference(vec![HttpProtocol::Http2])
+    }
+
+    /// Convenience constructor for HTTP/2 preferred over HTTP/1.1.
+    pub fn h2_h1() -> Self {
+        Self::with_preference(vec![HttpProtocol::Http2, HttpProtocol::Http1])
+    }
+
+    /// Convenience constructor for HTTP/3 only.
+    pub fn h3() -> Self {
+        Self::with_preference(vec![HttpProtocol::Http3])
+    }
+
+    /// Convenience constructor for HTTP/3 preferred over HTTP/2 and HTTP/1.1.
+    pub fn h3_h2_h1() -> Self {
+        Self::with_preference(vec![
+            HttpProtocol::Http3,
+            HttpProtocol::Http2,
+            HttpProtocol::Http1,
+        ])
+    }
+
+    /// Return the protocols in preference order.
+    pub fn preference(&self) -> &[HttpProtocol] {
+        &self.order
     }
 
     /// Return the max http version this [`ALPN`] allows
     pub fn get_max_http_version(&self) -> u8 {
-        match self {
-            ALPN::H1 => 1,
-            _ => 2,
-        }
+        self.order
+            .first()
+            .map(HttpProtocol::http_version)
+            .unwrap_or(1)
     }
 
     /// Return the min http version this [`ALPN`] allows
     pub fn get_min_http_version(&self) -> u8 {
-        match self {
-            ALPN::H2 => 2,
-            _ => 1,
-        }
+        self.order
+            .last()
+            .map(HttpProtocol::http_version)
+            .unwrap_or(1)
+    }
+
+    /// Whether the preference allows HTTP/3.
+    pub fn supports_http3(&self) -> bool {
+        self.order.contains(&HttpProtocol::Http3)
+    }
+
+    /// Whether the preference is HTTP/1.1 only.
+    pub fn is_http1_only(&self) -> bool {
+        self.order.len() == 1 && self.order[0] == HttpProtocol::Http1
+    }
+
+    /// Whether the preference is HTTP/2 only.
+    pub fn is_http2_only(&self) -> bool {
+        self.order.len() == 1 && self.order[0] == HttpProtocol::Http2
+    }
+
+    /// The most preferred protocol if any.
+    pub fn preferred(&self) -> Option<HttpProtocol> {
+        self.order.first().copied()
     }
 
     #[cfg(feature = "openssl_derived")]
-    pub(crate) fn to_wire_preference(&self) -> &[u8] {
+    pub(crate) fn to_wire_preference(&self) -> Vec<u8> {
         // https://www.openssl.org/docs/manmaster/man3/SSL_CTX_set_alpn_select_cb.html
         // "vector of nonempty, 8-bit length-prefixed, byte strings"
-        match self {
-            Self::H1 => b"\x08http/1.1",
-            Self::H2 => b"\x02h2",
-            Self::H2H1 => b"\x02h2\x08http/1.1",
+        let mut wire = Vec::new();
+        for proto in self.order.iter().filter_map(HttpProtocol::tls_wire) {
+            wire.push(proto.len() as u8);
+            wire.extend_from_slice(proto);
         }
+        wire
     }
 
     #[cfg(feature = "any_tls")]
     pub(crate) fn from_wire_selected(raw: &[u8]) -> Option<Self> {
         match raw {
-            b"http/1.1" => Some(Self::H1),
-            b"h2" => Some(Self::H2),
+            b"http/1.1" => Some(Self::h1()),
+            b"h2" => Some(Self::h2()),
             _ => None,
         }
     }
 
     #[cfg(feature = "rustls")]
     pub(crate) fn to_wire_protocols(&self) -> Vec<Vec<u8>> {
-        match self {
-            ALPN::H1 => vec![b"http/1.1".to_vec()],
-            ALPN::H2 => vec![b"h2".to_vec()],
-            ALPN::H2H1 => vec![b"h2".to_vec(), b"http/1.1".to_vec()],
+        self.order
+            .iter()
+            .filter_map(HttpProtocol::tls_wire)
+            .map(|p| p.to_vec())
+            .collect()
+    }
+
+    #[cfg(feature = "quic")]
+    pub(crate) fn to_quic_protocols(&self) -> Vec<Vec<u8>> {
+        self.order.iter().map(|p| p.quic_wire().to_vec()).collect()
+    }
+}
+
+impl Default for ALPN {
+    fn default() -> Self {
+        Self::h1()
+    }
+}
+
+impl std::fmt::Display for ALPN {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut iter = self.order.iter();
+        if let Some(first) = iter.next() {
+            write!(f, "{}", first.as_str())?;
         }
+        for proto in iter {
+            write!(f, "{}", proto.as_str())?;
+        }
+        Ok(())
     }
 }

@@ -17,7 +17,7 @@ use crate::connectors::{ConnectorOptions, TransportConnector};
 use crate::protocols::http::v1::client::HttpSession as Http1Session;
 use crate::protocols::http::v2::client::{drive_connection, Http2Session};
 use crate::protocols::{Digest, Stream, UniqueIDType};
-use crate::upstreams::peer::{Peer, ALPN};
+use crate::upstreams::peer::Peer;
 
 use bytes::Bytes;
 use h2::client::SendRequest;
@@ -246,7 +246,7 @@ impl Connector {
 
         // check alpn
         match stream.selected_alpn_proto() {
-            Some(ALPN::H2) => { /* continue */ }
+            Some(alpn) if alpn.is_http2_only() => { /* continue */ }
             Some(_) => {
                 // H2 not supported
                 return Ok(HttpSession::H1(Http1Session::new(stream)));
@@ -376,7 +376,7 @@ impl Connector {
         self.transport
             .preferred_http_version
             .get(peer)
-            .is_some_and(|v| matches!(v, ALPN::H1))
+            .is_some_and(|v| v.is_http1_only())
     }
 }
 
