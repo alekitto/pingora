@@ -60,8 +60,11 @@ fn recv_stream_messages(connection: &mut Connection, buffer: &mut Vec<u8>) {
         loop {
             let mut chunk = [0u8; 2048];
             match connection.inner_mut().stream_recv(stream_id, &mut chunk) {
-                Ok((len, _fin)) => {
+                Ok((len, fin)) => {
                     buffer.extend_from_slice(&chunk[..len]);
+                    if fin {
+                        break;
+                    }
                 }
                 Err(quiche::Error::Done) => break,
                 Err(err) => panic!("unexpected stream recv error: {err}"),
@@ -213,6 +216,9 @@ async fn quic_streams_and_datagrams_round_trip() {
                                         .stream_send(stream_id, &chunk[..len], fin)
                                         .expect("echo stream chunk");
                                     server_echoed_stream = true;
+                                    if fin {
+                                        break;
+                                    }
                                 }
                                 Err(quiche::Error::Done) => break,
                                 Err(err) => panic!("server stream recv failed: {err}"),
