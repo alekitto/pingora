@@ -1,4 +1,4 @@
-#![cfg(all(feature = "quic", feature = "http3_client"))]
+#![cfg(all(feature = "quic", feature = "http3"))]
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};

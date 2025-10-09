@@ -17,7 +17,7 @@
 pub mod http;
 pub mod l4;
 mod offload;
-#[cfg(feature = "http3_client")]
+#[cfg(feature = "http3")]
 pub mod quic;
 
 #[cfg(feature = "any_tls")]
