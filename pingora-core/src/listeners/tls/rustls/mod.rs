@@ -77,7 +77,7 @@ impl TlsSettings {
     /// Enable HTTP/2 support for this endpoint, which is default off.
     /// This effectively sets the ALPN to prefer HTTP/2 with HTTP/1.1 allowed
     pub fn enable_h2(&mut self) {
-        self.set_alpn(ALPN::H2H1);
+        self.set_alpn(ALPN::h2_h1());
     }
 
     fn set_alpn(&mut self, alpn: ALPN) {

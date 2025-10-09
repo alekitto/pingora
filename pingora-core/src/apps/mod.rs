@@ -27,7 +27,6 @@ use crate::protocols::http::v2::server;
 use crate::protocols::http::ServerSession;
 use crate::protocols::Digest;
 use crate::protocols::Stream;
-use crate::protocols::ALPN;
 
 // https://datatracker.ietf.org/doc/html/rfc9113#section-3.4
 const H2_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
@@ -165,7 +164,11 @@ where
                 h2c = buf == H2_PREFACE;
             }
         }
-        if h2c || matches!(stream.selected_alpn_proto(), Some(ALPN::H2)) {
+        if h2c
+            || stream
+                .selected_alpn_proto()
+                .is_some_and(|alpn| alpn.is_http2_only())
+        {
             // create a shared connection digest
             let digest = Arc::new(Digest {
                 ssl_digest: stream.get_ssl_digest(),
@@ -216,7 +219,7 @@ where
                 });
             }
         } else {
-            // No ALPN or ALPN::H1 and h2c was not configured, fallback to HTTP/1.1
+            // No ALPN or HTTP/2 selection and h2c was not configured, fallback to HTTP/1.1
             let mut session = ServerSession::new_http1(stream);
             if *shutdown.borrow() {
                 // stop downstream from reusing if this service is shutting down soon

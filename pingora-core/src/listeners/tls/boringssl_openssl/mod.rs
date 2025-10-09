@@ -16,6 +16,7 @@ use log::debug;
 use pingora_error::{ErrorType, OrErr, Result};
 use std::ops::{Deref, DerefMut};
 
+use crate::protocols::tls::HttpProtocol;
 pub use crate::protocols::tls::ALPN;
 use crate::protocols::IO;
 use crate::tls::ssl::{SslAcceptor, SslAcceptorBuilder, SslFiletype, SslMethod};
@@ -102,17 +103,30 @@ impl TlsSettings {
     /// Enable HTTP/2 support for this endpoint, which is default off.
     /// This effectively sets the ALPN to prefer HTTP/2 with HTTP/1.1 allowed
     pub fn enable_h2(&mut self) {
-        self.set_alpn(ALPN::H2H1);
+        self.set_alpn(ALPN::h2_h1());
     }
 
     /// Set the ALPN preference of this endpoint. See [`ALPN`] for more details
     pub fn set_alpn(&mut self, alpn: ALPN) {
-        match alpn {
-            ALPN::H2H1 => self
-                .accept_builder
-                .set_alpn_select_callback(alpn::prefer_h2),
-            ALPN::H1 => self.accept_builder.set_alpn_select_callback(alpn::h1_only),
-            ALPN::H2 => self.accept_builder.set_alpn_select_callback(alpn::h2_only),
+        let has_h2 = alpn
+            .preference()
+            .iter()
+            .any(|p| matches!(p, HttpProtocol::Http2));
+        let has_h1 = alpn
+            .preference()
+            .iter()
+            .any(|p| matches!(p, HttpProtocol::Http1));
+        if alpn.is_http1_only() || (!has_h2 && has_h1) {
+            self.accept_builder.set_alpn_select_callback(alpn::h1_only);
+        } else if alpn.is_http2_only() && !has_h1 {
+            self.accept_builder.set_alpn_select_callback(alpn::h2_only);
+        } else if has_h2 && has_h1 {
+            self.accept_builder
+                .set_alpn_select_callback(alpn::prefer_h2);
+        } else if has_h2 {
+            self.accept_builder.set_alpn_select_callback(alpn::h2_only);
+        } else {
+            self.accept_builder.set_alpn_select_callback(alpn::h1_only);
         }
     }
 
@@ -154,7 +168,8 @@ mod alpn {
         if !valid_alpn(alpn_in) {
             return Err(AlpnError::NOACK);
         }
-        match select_next_proto(ALPN::H2H1.to_wire_preference(), alpn_in) {
+        let pref = ALPN::h2_h1().to_wire_preference();
+        match select_next_proto(&pref, alpn_in) {
             Some(p) => Ok(p),
             _ => Err(AlpnError::NOACK), // unknown ALPN, just ignore it. Most clients will fallback to h1
         }
@@ -164,7 +179,8 @@ mod alpn {
         if !valid_alpn(alpn_in) {
             return Err(AlpnError::NOACK);
         }
-        match select_next_proto(ALPN::H1.to_wire_preference(), alpn_in) {
+        let pref = ALPN::h1().to_wire_preference();
+        match select_next_proto(&pref, alpn_in) {
             Some(p) => Ok(p),
             _ => Err(AlpnError::NOACK), // unknown ALPN, just ignore it. Most clients will fallback to h1
         }
@@ -174,7 +190,8 @@ mod alpn {
         if !valid_alpn(alpn_in) {
             return Err(AlpnError::ALERT_FATAL);
         }
-        match select_next_proto(ALPN::H2.to_wire_preference(), alpn_in) {
+        let pref = ALPN::h2().to_wire_preference();
+        match select_next_proto(&pref, alpn_in) {
             Some(p) => Ok(p),
             _ => Err(AlpnError::ALERT_FATAL), // cannot agree
         }

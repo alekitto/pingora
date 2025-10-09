@@ -220,7 +220,8 @@ pub trait Peer: Display + Clone {
 
     #[cfg(feature = "quic")]
     fn quic_transport_options(&self) -> Option<&QuicTransportOptions> {
-        None
+        self.get_peer_options()
+            .and_then(|opt| opt.quic_transport_options())
     }
 }
 
@@ -294,7 +295,7 @@ impl Peer for BasicPeer {
 }
 
 #[cfg(feature = "quic")]
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct QuicTransportOptions {
     pub server_name: Option<String>,
     pub alpn_protocols: Vec<Vec<u8>>,
@@ -312,7 +313,7 @@ impl QuicTransportOptions {
     pub fn new() -> Self {
         Self {
             server_name: None,
-            alpn_protocols: Vec::new(),
+            alpn_protocols: vec![b"h3".to_vec()],
             handshake_timeout: None,
             idle_timeout: None,
             source_connection_id: None,
@@ -321,6 +322,13 @@ impl QuicTransportOptions {
             zero_rtt_token: None,
             max_datagram_size: Some(MAX_DATAGRAM_SIZE),
         }
+    }
+}
+
+#[cfg(feature = "quic")]
+impl Default for QuicTransportOptions {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -469,6 +477,8 @@ pub struct PeerOptions {
     #[derivative(Debug = "ignore")]
     pub upstream_tcp_sock_tweak_hook:
         Option<Arc<dyn Fn(&TcpSocket) -> Result<()> + Send + Sync + 'static>>,
+    #[cfg(feature = "quic")]
+    pub quic: Option<QuicTransportOptions>,
 }
 
 impl PeerOptions {
@@ -484,7 +494,7 @@ impl PeerOptions {
             verify_cert: true,
             verify_hostname: true,
             alternative_cn: None,
-            alpn: ALPN::H1,
+            alpn: ALPN::h1(),
             ca: None,
             tcp_keepalive: None,
             tcp_recv_buf: None,
@@ -498,12 +508,37 @@ impl PeerOptions {
             tracer: None,
             custom_l4: None,
             upstream_tcp_sock_tweak_hook: None,
+            #[cfg(feature = "quic")]
+            quic: None,
         }
     }
 
     /// Set the ALPN according to the `max` and `min` constrains.
     pub fn set_http_version(&mut self, max: u8, min: u8) {
         self.alpn = ALPN::new(max, min);
+        #[cfg(feature = "quic")]
+        self.sync_quic_from_alpn();
+    }
+
+    #[cfg(feature = "quic")]
+    fn sync_quic_from_alpn(&mut self) {
+        if self.alpn.supports_http3() {
+            let mut options = self.quic.clone().unwrap_or_else(QuicTransportOptions::new);
+            options.alpn_protocols = self.alpn.to_quic_protocols();
+            self.quic = Some(options);
+        } else {
+            self.quic = None;
+        }
+    }
+
+    #[cfg(feature = "quic")]
+    pub fn quic_transport_options(&self) -> Option<&QuicTransportOptions> {
+        self.quic.as_ref()
+    }
+
+    #[cfg(feature = "quic")]
+    pub fn quic_transport_options_mut(&mut self) -> Option<&mut QuicTransportOptions> {
+        self.quic.as_mut()
     }
 }
 
