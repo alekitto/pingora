@@ -121,3 +121,7 @@ any_tls = []
 patched_http1 = ["pingora-core/patched_http1"]
 document-features = ["dep:document-features", "proxy", "lb", "cache", "time", "sentry"]
 quic = ["pingora-core/quic", "dep:pingora-load-balancing", "pingora-load-balancing/quic"]
+
+[[example]]
+name = "quic_lb"
+required-features = ["quic"]
