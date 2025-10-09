@@ -22,8 +22,6 @@
 //! [`LoadBalancer::select_with_protocol`], allowing future packets that
 //! share the same connection identifier to reuse the backend decision.
 
-#![cfg(feature = "quic")]
-
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -393,7 +391,7 @@ impl QuicEngine {
             }
         };
 
-        let recv_info = datagram.recv_info().clone();
+        let recv_info = *datagram.recv_info();
         let scid = quiche::ConnectionId::from_ref(header.dcid.as_ref());
 
         let connection = match self

@@ -1,11 +1,9 @@
-#![cfg(feature = "http3")]
-
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use log::{debug, trace};
-use pingora_error::{Error, ErrorType::InternalError, OrErr, Result};
+use log::trace;
+use pingora_error::{Error, ErrorType::InternalError, OkOrErr, OrErr, Result};
 use rand::{rngs::OsRng, RngCore};
 use tokio::net::UdpSocket;
 
@@ -13,7 +11,6 @@ use crate::protocols::quic::{ClientConfig, Connection, Datagram, Endpoint, SendD
 use crate::upstreams::peer::{Peer, QuicTransportOptions};
 
 /// Wrapper around a QUIC client connection and its underlying UDP endpoint.
-#[derive(Debug)]
 pub struct QuicUpstream {
     endpoint: Endpoint,
     connection: Connection,
@@ -162,7 +159,7 @@ impl QuicConnector {
                 }
             });
 
-        let mut connection = self
+        let connection = self
             .config
             .connect(server_name, &scid, local_addr, remote_addr)
             .or_err(InternalError, "failed to establish QUIC connection")?;

@@ -497,7 +497,7 @@ mod tests {
         let h2 = connector.new_http_session(&peer).await.unwrap();
         match h2 {
             HttpSession::H1(_) => {}
-            HttpSession::H2(_) => panic!("expect h1"),
+            _ => panic!("expect h1"),
         }
     }
 
@@ -510,8 +510,8 @@ mod tests {
         peer.options.max_h2_streams = 1;
         let h2 = connector.new_http_session(&peer).await.unwrap();
         let h2_1 = match h2 {
-            HttpSession::H1(_) => panic!("expect h2"),
             HttpSession::H2(h2_stream) => h2_stream,
+            _ => panic!("expect h2"),
         };
 
         let id = h2_1.conn.id();
@@ -542,8 +542,8 @@ mod tests {
         peer.options.max_h2_streams = 3;
         let h2 = connector.new_http_session(&peer).await.unwrap();
         let h2_1 = match h2 {
-            HttpSession::H1(_) => panic!("expect h2"),
             HttpSession::H2(h2_stream) => h2_stream,
+            _ => panic!("expect h2"),
         };
 
         let id = h2_1.conn.id();

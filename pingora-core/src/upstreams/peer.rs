@@ -16,7 +16,6 @@
 
 use crate::connectors::{l4::BindTo, L4Connect};
 use crate::protocols::l4::socket::SocketAddr;
-#[cfg(feature = "quic")]
 use crate::protocols::quic::MAX_DATAGRAM_SIZE;
 use crate::protocols::tls::CaType;
 #[cfg(unix)]
@@ -217,8 +216,6 @@ pub trait Peer: Display + Clone {
             .upstream_tcp_sock_tweak_hook
             .as_ref()
     }
-
-    #[cfg(feature = "quic")]
     fn quic_transport_options(&self) -> Option<&QuicTransportOptions> {
         self.get_peer_options()
             .and_then(|opt| opt.quic_transport_options())
@@ -293,8 +290,6 @@ impl Peer for BasicPeer {
         Some(&self.options)
     }
 }
-
-#[cfg(feature = "quic")]
 #[derive(Debug, Clone)]
 pub struct QuicTransportOptions {
     pub server_name: Option<String>,
@@ -307,8 +302,6 @@ pub struct QuicTransportOptions {
     pub zero_rtt_token: Option<Vec<u8>>,
     pub max_datagram_size: Option<usize>,
 }
-
-#[cfg(feature = "quic")]
 impl QuicTransportOptions {
     pub fn new() -> Self {
         Self {
@@ -324,15 +317,11 @@ impl QuicTransportOptions {
         }
     }
 }
-
-#[cfg(feature = "quic")]
 impl Default for QuicTransportOptions {
     fn default() -> Self {
         Self::new()
     }
 }
-
-#[cfg(feature = "quic")]
 #[derive(Debug, Clone)]
 pub struct QuicPeer {
     pub address: SocketAddr,
@@ -340,8 +329,6 @@ pub struct QuicPeer {
     pub options: PeerOptions,
     pub quic: QuicTransportOptions,
 }
-
-#[cfg(feature = "quic")]
 impl QuicPeer {
     pub fn new(address: &str) -> Result<Self> {
         let address = SocketAddr::Inet(
@@ -365,15 +352,11 @@ impl QuicPeer {
         self.quic = options;
     }
 }
-
-#[cfg(feature = "quic")]
 impl Display for QuicPeer {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(f, "QuicPeer({})", self.address)
     }
 }
-
-#[cfg(feature = "quic")]
 impl Peer for QuicPeer {
     fn address(&self) -> &SocketAddr {
         &self.address
@@ -477,7 +460,6 @@ pub struct PeerOptions {
     #[derivative(Debug = "ignore")]
     pub upstream_tcp_sock_tweak_hook:
         Option<Arc<dyn Fn(&TcpSocket) -> Result<()> + Send + Sync + 'static>>,
-    #[cfg(feature = "quic")]
     pub quic: Option<QuicTransportOptions>,
 }
 
@@ -508,7 +490,6 @@ impl PeerOptions {
             tracer: None,
             custom_l4: None,
             upstream_tcp_sock_tweak_hook: None,
-            #[cfg(feature = "quic")]
             quic: None,
         }
     }
@@ -516,27 +497,20 @@ impl PeerOptions {
     /// Set the ALPN according to the `max` and `min` constrains.
     pub fn set_http_version(&mut self, max: u8, min: u8) {
         self.alpn = ALPN::new(max, min);
-        #[cfg(feature = "quic")]
         self.sync_quic_from_alpn();
     }
-
-    #[cfg(feature = "quic")]
     fn sync_quic_from_alpn(&mut self) {
         if self.alpn.supports_http3() {
-            let mut options = self.quic.clone().unwrap_or_else(QuicTransportOptions::new);
+            let mut options = self.quic.clone().unwrap_or_default();
             options.alpn_protocols = self.alpn.to_quic_protocols();
             self.quic = Some(options);
         } else {
             self.quic = None;
         }
     }
-
-    #[cfg(feature = "quic")]
     pub fn quic_transport_options(&self) -> Option<&QuicTransportOptions> {
         self.quic.as_ref()
     }
-
-    #[cfg(feature = "quic")]
     pub fn quic_transport_options_mut(&mut self) -> Option<&mut QuicTransportOptions> {
         self.quic.as_mut()
     }

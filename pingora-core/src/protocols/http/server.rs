@@ -18,7 +18,6 @@ use super::error_resp;
 use super::subrequest::server::HttpSession as SessionSubrequest;
 use super::v1::server::HttpSession as SessionV1;
 use super::v2::server::HttpSession as SessionV2;
-#[cfg(feature = "quic")]
 use super::v3::server::HttpSession as SessionV3;
 use super::HttpTask;
 use crate::protocols::{Digest, SocketAddr, Stream};
@@ -33,8 +32,7 @@ use std::time::Duration;
 pub enum Session {
     H1(SessionV1),
     H2(SessionV2),
-    #[cfg(feature = "quic")]
-    H3(SessionV3),
+    H3(Box<SessionV3>),
     Subrequest(SessionSubrequest),
 }
 
@@ -50,9 +48,8 @@ impl Session {
     }
 
     /// Create a new [`Session`] from an HTTP/3 session.
-    #[cfg(feature = "quic")]
     pub fn new_http3(session: SessionV3) -> Self {
-        Self::H3(session)
+        Self::H3(Box::new(session))
     }
 
     /// Create a new [`Session`] from a subrequest session
@@ -83,7 +80,6 @@ impl Session {
             }
             // This call will always return `Ok(true)` for Http2 because the request is already read
             Self::H2(_) => Ok(true),
-            #[cfg(feature = "quic")]
             Self::H3(_) => Ok(true),
             Self::Subrequest(s) => {
                 let read = s.read_request().await?;
@@ -99,7 +95,6 @@ impl Session {
         match self {
             Self::H1(s) => s.req_header(),
             Self::H2(s) => s.req_header(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.req_header(),
             Self::Subrequest(s) => s.req_header(),
         }
@@ -112,7 +107,6 @@ impl Session {
         match self {
             Self::H1(s) => s.req_header_mut(),
             Self::H2(s) => s.req_header_mut(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.req_header_mut(),
             Self::Subrequest(s) => s.req_header_mut(),
         }
@@ -137,7 +131,6 @@ impl Session {
         match self {
             Self::H1(s) => s.read_body_bytes().await,
             Self::H2(s) => s.read_body_bytes().await,
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.read_body_bytes().await,
             Self::Subrequest(s) => s.read_body_bytes().await,
         }
@@ -151,7 +144,6 @@ impl Session {
         match self {
             Self::H1(s) => s.drain_request_body().await,
             Self::H2(s) => s.drain_request_body().await,
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.drain_request_body().await,
             Self::Subrequest(s) => s.drain_request_body().await,
         }
@@ -167,7 +159,6 @@ impl Session {
                 Ok(())
             }
             Self::H2(s) => s.write_response_header(resp, false),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.write_response_header(resp).await,
             Self::Subrequest(s) => {
                 s.write_response_header(resp).await?;
@@ -184,7 +175,6 @@ impl Session {
                 Ok(())
             }
             Self::H2(s) => s.write_response_header_ref(resp, false),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.write_response_header_ref(resp).await,
             Self::Subrequest(s) => {
                 s.write_response_header_ref(resp).await?;
@@ -212,7 +202,6 @@ impl Session {
                 Ok(())
             }
             Self::H2(s) => s.write_body(data, end).await,
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.write_response_body(data, end).await,
             Self::Subrequest(s) => {
                 s.write_body(data).await?;
@@ -226,7 +215,6 @@ impl Session {
         match self {
             Self::H1(_) => Ok(()), // TODO: support trailers for h1
             Self::H2(s) => s.write_trailers(trailers),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.write_response_trailers(trailers).await,
             Self::Subrequest(s) => s.write_trailers(Some(Box::new(trailers))).await,
         }
@@ -247,7 +235,6 @@ impl Session {
                 s.finish()?;
                 Ok(None)
             }
-            #[cfg(feature = "quic")]
             Self::H3(mut s) => {
                 s.finish().await?;
                 Ok(None)
@@ -263,7 +250,6 @@ impl Session {
         match self {
             Self::H1(s) => s.response_duplex_vec(tasks).await,
             Self::H2(s) => s.response_duplex_vec(tasks).await,
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.response_duplex_vec(tasks).await,
             Self::Subrequest(s) => s.response_duplex_vec(tasks).await,
         }
@@ -275,7 +261,6 @@ impl Session {
         match self {
             Self::H1(s) => s.set_server_keepalive(duration),
             Self::H2(_) => {}
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.set_server_keepalive(duration),
             Self::Subrequest(_) => {}
         }
@@ -287,7 +272,6 @@ impl Session {
         match self {
             Self::H1(s) => s.get_keepalive_timeout(),
             Self::H2(_) => None,
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.get_keepalive_timeout(),
             Self::Subrequest(_) => None,
         }
@@ -301,7 +285,6 @@ impl Session {
         match self {
             Self::H1(s) => s.set_read_timeout(timeout),
             Self::H2(_) => {}
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.set_read_timeout(timeout),
             Self::Subrequest(s) => s.set_read_timeout(timeout),
         }
@@ -312,7 +295,6 @@ impl Session {
         match self {
             Self::H1(s) => s.get_read_timeout(),
             Self::H2(_) => None,
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.get_read_timeout(),
             Self::Subrequest(s) => s.get_read_timeout(),
         }
@@ -325,7 +307,6 @@ impl Session {
         match self {
             Self::H1(s) => s.set_write_timeout(timeout),
             Self::H2(s) => s.set_write_timeout(timeout),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.set_write_timeout(timeout),
             Self::Subrequest(s) => s.set_write_timeout(timeout),
         }
@@ -336,7 +317,6 @@ impl Session {
         match self {
             Self::H1(s) => s.get_write_timeout(),
             Self::H2(s) => s.get_write_timeout(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.get_write_timeout(),
             Self::Subrequest(s) => s.get_write_timeout(),
         }
@@ -352,7 +332,6 @@ impl Session {
         match self {
             Self::H1(s) => s.set_total_drain_timeout(timeout),
             Self::H2(s) => s.set_total_drain_timeout(timeout),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.set_total_drain_timeout(timeout),
             Self::Subrequest(s) => s.set_total_drain_timeout(timeout),
         }
@@ -363,7 +342,6 @@ impl Session {
         match self {
             Self::H1(s) => s.get_total_drain_timeout(),
             Self::H2(s) => s.get_total_drain_timeout(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.get_total_drain_timeout(),
             Self::Subrequest(s) => s.get_total_drain_timeout(),
         }
@@ -383,7 +361,6 @@ impl Session {
         match self {
             Self::H1(s) => s.set_min_send_rate(rate),
             Self::H2(_) => {}
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.set_min_send_rate(rate),
             Self::Subrequest(_) => {}
         }
@@ -401,7 +378,6 @@ impl Session {
         match self {
             Self::H1(s) => s.set_ignore_info_resp(ignore),
             Self::H2(_) => {} // always ignored
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.set_ignore_info_resp(ignore),
             Self::Subrequest(_) => {}
         }
@@ -415,7 +391,6 @@ impl Session {
         match self {
             Self::H1(s) => s.set_close_on_response_before_downstream_finish(close),
             Self::H2(_) => {} // always ignored
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.set_close_on_response_before_downstream_finish(close),
             Self::Subrequest(_) => {} // always ignored
         }
@@ -427,7 +402,6 @@ impl Session {
         match self {
             Self::H1(s) => s.request_summary(),
             Self::H2(s) => s.request_summary(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.request_summary(),
             Self::Subrequest(s) => s.request_summary(),
         }
@@ -439,7 +413,6 @@ impl Session {
         match self {
             Self::H1(s) => s.response_written(),
             Self::H2(s) => s.response_written(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.response_written(),
             Self::Subrequest(s) => s.response_written(),
         }
@@ -453,7 +426,6 @@ impl Session {
         match self {
             Self::H1(s) => s.shutdown().await,
             Self::H2(s) => s.shutdown(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.shutdown().await,
             Self::Subrequest(s) => s.shutdown(),
         }
@@ -463,7 +435,6 @@ impl Session {
         match self {
             Self::H1(s) => s.get_headers_raw_bytes(),
             Self::H2(s) => s.pseudo_raw_h1_request_header(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.to_h1_raw(),
             Self::Subrequest(s) => s.get_headers_raw_bytes(),
         }
@@ -474,7 +445,6 @@ impl Session {
         match self {
             Self::H1(s) => s.is_body_done(),
             Self::H2(s) => s.is_body_done(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.is_body_done(),
             Self::Subrequest(s) => s.is_body_done(),
         }
@@ -489,7 +459,6 @@ impl Session {
         match self {
             Self::H1(s) => s.finish_body().await.map(|_| ()),
             Self::H2(s) => s.finish(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.finish_body().await,
             Self::Subrequest(s) => s.finish().await.map(|_| ()),
         }
@@ -554,7 +523,6 @@ impl Session {
         match self {
             Self::H1(s) => s.is_body_empty(),
             Self::H2(s) => s.is_body_empty(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.is_body_empty(),
             Self::Subrequest(s) => s.is_body_empty(),
         }
@@ -564,7 +532,6 @@ impl Session {
         match self {
             Self::H1(s) => s.retry_buffer_truncated(),
             Self::H2(s) => s.retry_buffer_truncated(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.retry_buffer_truncated(),
             Self::Subrequest(s) => s.retry_buffer_truncated(),
         }
@@ -574,7 +541,6 @@ impl Session {
         match self {
             Self::H1(s) => s.enable_retry_buffering(),
             Self::H2(s) => s.enable_retry_buffering(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.enable_retry_buffering(),
             Self::Subrequest(s) => s.enable_retry_buffering(),
         }
@@ -584,7 +550,6 @@ impl Session {
         match self {
             Self::H1(s) => s.get_retry_buffer(),
             Self::H2(s) => s.get_retry_buffer(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.get_retry_buffer(),
             Self::Subrequest(s) => s.get_retry_buffer(),
         }
@@ -596,7 +561,6 @@ impl Session {
         match self {
             Self::H1(s) => s.read_body_or_idle(no_body_expected).await,
             Self::H2(s) => s.read_body_or_idle(no_body_expected).await,
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.read_body_or_idle(no_body_expected).await,
             Self::Subrequest(s) => s.read_body_or_idle(no_body_expected).await,
         }
@@ -606,7 +570,6 @@ impl Session {
         match self {
             Self::H1(s) => Some(s),
             Self::H2(_) => None,
-            #[cfg(feature = "quic")]
             Self::H3(_) => None,
             Self::Subrequest(_) => None,
         }
@@ -616,7 +579,6 @@ impl Session {
         match self {
             Self::H1(_) => None,
             Self::H2(s) => Some(s),
-            #[cfg(feature = "quic")]
             Self::H3(_) => None,
             Self::Subrequest(_) => None,
         }
@@ -626,7 +588,6 @@ impl Session {
         match self {
             Self::H1(_) => None,
             Self::H2(_) => None,
-            #[cfg(feature = "quic")]
             Self::H3(_) => None,
             Self::Subrequest(s) => Some(s),
         }
@@ -636,7 +597,6 @@ impl Session {
         match self {
             Self::H1(_) => None,
             Self::H2(_) => None,
-            #[cfg(feature = "quic")]
             Self::H3(_) => None,
             Self::Subrequest(s) => Some(s),
         }
@@ -650,7 +610,6 @@ impl Session {
                 Box::new(ResponseHeader::build(100, Some(0)).unwrap()),
                 false,
             ),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.write_continue_response().await,
             Self::Subrequest(s) => s.write_continue_response().await,
         }
@@ -661,7 +620,6 @@ impl Session {
         match self {
             Self::H1(s) => s.is_upgrade_req(),
             Self::H2(_) => false,
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.is_upgrade_req(),
             Self::Subrequest(s) => s.is_upgrade_req(),
         }
@@ -672,7 +630,6 @@ impl Session {
         match self {
             Self::H1(s) => s.body_bytes_sent(),
             Self::H2(s) => s.body_bytes_sent(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.body_bytes_sent(),
             Self::Subrequest(s) => s.body_bytes_sent(),
         }
@@ -683,7 +640,6 @@ impl Session {
         match self {
             Self::H1(s) => s.body_bytes_read(),
             Self::H2(s) => s.body_bytes_read(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.body_bytes_read(),
             Self::Subrequest(s) => s.body_bytes_read(),
         }
@@ -694,7 +650,6 @@ impl Session {
         match self {
             Self::H1(s) => Some(s.digest()),
             Self::H2(s) => s.digest(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.digest(),
             Self::Subrequest(s) => s.digest(),
         }
@@ -707,7 +662,6 @@ impl Session {
         match self {
             Self::H1(s) => Some(s.digest_mut()),
             Self::H2(s) => s.digest_mut(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.digest_mut(),
             Self::Subrequest(s) => s.digest_mut(),
         }
@@ -718,7 +672,6 @@ impl Session {
         match self {
             Self::H1(s) => s.client_addr(),
             Self::H2(s) => s.client_addr(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.client_addr(),
             Self::Subrequest(s) => s.client_addr(),
         }
@@ -729,7 +682,6 @@ impl Session {
         match self {
             Self::H1(s) => s.server_addr(),
             Self::H2(s) => s.server_addr(),
-            #[cfg(feature = "quic")]
             Self::H3(s) => s.server_addr(),
             Self::Subrequest(s) => s.server_addr(),
         }
@@ -741,7 +693,6 @@ impl Session {
         match self {
             Self::H1(s) => Some(s.stream()),
             Self::H2(_) => None,
-            #[cfg(feature = "quic")]
             Self::H3(_) => None,
             Self::Subrequest(_) => None,
         }

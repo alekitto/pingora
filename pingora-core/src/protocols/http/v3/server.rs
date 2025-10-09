@@ -31,13 +31,10 @@ use pingora_http::{RequestHeader, ResponseHeader};
 
 use crate::protocols::http::v1::client::http_req_header_to_wire;
 use crate::protocols::http::HttpTask;
-use crate::protocols::quic::Connection as QuicTransport;
 use crate::protocols::{Digest, SocketAddr};
 
 /// HTTP/3 server session placeholder built on top of `quiche::h3::Connection`.
-#[cfg_attr(not(feature = "quic"), allow(dead_code))]
 pub struct HttpSession {
-    transport: QuicTransport,
     connection: quiche::h3::Connection,
     digest: Arc<Digest>,
     request_header: RequestHeader,
@@ -60,14 +57,9 @@ pub struct HttpSession {
 impl HttpSession {
     /// Create a new HTTP/3 session wrapper around a `quiche::h3::Connection` and
     /// an associated [`Digest`].
-    pub fn new(
-        transport: QuicTransport,
-        connection: quiche::h3::Connection,
-        digest: Arc<Digest>,
-    ) -> Result<Self> {
+    pub fn new(connection: quiche::h3::Connection, digest: Arc<Digest>) -> Result<Self> {
         let request_header = RequestHeader::build_no_case(Method::GET, b"/", None)?;
         Ok(Self {
-            transport,
             connection,
             digest,
             request_header,
@@ -93,12 +85,8 @@ impl HttpSession {
     /// This helper intentionally bypasses detailed header parsing so that the
     /// service layer can be wired before the full protocol implementation
     /// lands.
-    pub fn placeholder(
-        transport: QuicTransport,
-        connection: quiche::h3::Connection,
-        digest: Arc<Digest>,
-    ) -> Self {
-        Self::new(transport, connection, digest)
+    pub fn placeholder(connection: quiche::h3::Connection, digest: Arc<Digest>) -> Self {
+        Self::new(connection, digest)
             .unwrap_or_else(|err| panic!("failed to construct placeholder HTTP/3 session: {err}"))
     }
 
@@ -142,8 +130,6 @@ impl HttpSession {
         if let Some(chunk) = self.request_body.pop_front() {
             self.body_read += chunk.len();
             Ok(Some(chunk))
-        } else if self.request_body_finished {
-            Ok(None)
         } else {
             Ok(None)
         }

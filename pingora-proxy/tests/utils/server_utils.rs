@@ -34,7 +34,6 @@ use pingora_cache::{
 };
 use pingora_core::apps::{HttpServerApp, HttpServerOptions};
 use pingora_core::modules::http::compression::ResponseCompression;
-#[cfg(feature = "quic")]
 use pingora_core::protocols::quic::TransportConfigBuilder;
 use pingora_core::protocols::{
     http::error_resp::gen_error_response, l4::socket::SocketAddr, Digest,
@@ -691,7 +690,6 @@ fn test_main() {
     let mut proxy_service_http =
         pingora_proxy::http_proxy_service(&my_server.configuration, ExampleProxyHttp {});
     proxy_service_http.add_tcp("0.0.0.0:6147");
-    #[cfg(feature = "quic")]
     {
         let cert_path = format!("{}/tests/keys/server.crt", env!("CARGO_MANIFEST_DIR"));
         let key_path = format!("{}/tests/keys/key.pem", env!("CARGO_MANIFEST_DIR"));

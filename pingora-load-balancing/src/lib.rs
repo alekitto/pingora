@@ -30,7 +30,6 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
 use std::io::Result as IoResult;
-#[cfg(feature = "quic")]
 use std::net::ToSocketAddrs;
 use std::sync::Arc;
 use std::time::Duration;
@@ -42,7 +41,6 @@ pub mod selection;
 
 use discovery::ServiceDiscovery;
 use health_check::Health;
-#[cfg(feature = "quic")]
 use pingora_core::services::quic::{QuicBackendSelector, SelectedBackend};
 use selection::UniqueIterator;
 use selection::{BackendIter, BackendSelection};
@@ -53,7 +51,6 @@ pub mod prelude {
     pub use crate::{BackendProtocol, LoadBalancer};
 }
 
-#[cfg(feature = "quic")]
 impl<S> QuicBackendSelector for LoadBalancer<S>
 where
     S: selection::BackendSelection + Send + Sync + 'static,

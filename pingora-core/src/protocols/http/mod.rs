@@ -25,7 +25,6 @@ pub mod server;
 pub mod subrequest;
 pub mod v1;
 pub mod v2;
-#[cfg(feature = "quic")]
 pub mod v3;
 
 pub use server::Session as ServerSession;

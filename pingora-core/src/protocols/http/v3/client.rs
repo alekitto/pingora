@@ -22,20 +22,19 @@
 //! that it can serve as a scaffold for further feature work such as more
 //! advanced flow-control handling or concurrent stream multiplexing.
 
-#![cfg(feature = "quic")]
-
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use bytes::{Bytes, BytesMut};
 use http::header::{HeaderName, HeaderValue};
-use pingora_error::{Error, ErrorType::*, OrErr, Result};
+use pingora_error::{Error, ErrorType, ErrorType::*, OrErr, Result};
 use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_timeout::timeout;
+use quiche::h3::NameValue;
 
 use crate::connectors::quic::QuicUpstream;
 use crate::protocols::http::HttpTask;
-use crate::protocols::{Digest, SocketAddr};
+use crate::protocols::{Digest, GetProxyDigest, GetSocketDigest, GetTimingDigest, SocketAddr};
 
 const H3_ERROR: ErrorType = ErrorType::new("H3Error");
 const H3_STREAM_RESET: ErrorType = ErrorType::new("H3StreamReset");
@@ -92,10 +91,6 @@ impl HttpSession {
             .ok_or_else(|| Error::explain(InternalError, "HTTP/3 stream not initialised"))
     }
 
-    fn quic_error<E: std::fmt::Display>(context: &str, err: E) -> Error {
-        Error::new(H3_ERROR, format!("{context}: {err}"))
-    }
-
     fn convert_request_headers(req: &RequestHeader) -> Result<Vec<quiche::h3::Header>> {
         let mut headers = Vec::new();
 
@@ -109,7 +104,7 @@ impl HttpSession {
             .scheme()
             .map(|s| s.as_str().as_bytes().to_vec())
             .unwrap_or_else(|| b"https".to_vec());
-        headers.push(quiche::h3::Header::new(b":scheme", scheme));
+        headers.push(quiche::h3::Header::new(b":scheme", scheme.as_slice()));
 
         let authority = match req.uri.authority() {
             Some(authority) => authority.as_str().as_bytes().to_vec(),
@@ -120,10 +115,13 @@ impl HttpSession {
                 .unwrap_or_default(),
         };
         if !authority.is_empty() {
-            headers.push(quiche::h3::Header::new(b":authority", authority));
+            headers.push(quiche::h3::Header::new(b":authority", authority.as_slice()));
         }
 
-        headers.push(quiche::h3::Header::new(b":path", req.raw_path().to_vec()));
+        headers.push(quiche::h3::Header::new(
+            b":path",
+            req.raw_path().to_vec().as_slice(),
+        ));
 
         for (name, value) in req.headers.iter() {
             if name == http::header::HOST {
@@ -177,10 +175,10 @@ impl HttpSession {
                     let send_future = self.upstream.send(&packet);
                     match self.write_timeout {
                         Some(timeout_duration) => {
-                            timeout(timeout_duration, send_future).await.or_err(
-                                WriteTimedout,
-                                "timeout while flushing HTTP/3 datagram",
-                            )??;
+                            timeout(timeout_duration, send_future)
+                                .await
+                                .or_err(WriteTimedout, "timeout while flushing HTTP/3 datagram")?
+                                .map_err(|e| Error::because(H3_ERROR, "write error", e))?;
                         }
                         None => {
                             send_future
@@ -191,7 +189,7 @@ impl HttpSession {
                 }
                 Err(quiche::Error::Done) => break,
                 Err(err) => {
-                    return Err(Self::quic_error("quiche send", err));
+                    return Error::e_because(H3_ERROR, "quiche send", err);
                 }
             }
         }
@@ -227,7 +225,7 @@ impl HttpSession {
                 Ok(true)
             }
             Err(quiche::Error::Done) => Ok(false),
-            Err(err) => Err(Self::quic_error("quiche recv", err)),
+            Err(err) => Error::e_because(H3_ERROR, "quiche recv", err),
         }
     }
 
@@ -240,7 +238,7 @@ impl HttpSession {
                         return Ok(None);
                     }
                 }
-                Err(err) => return Err(Self::quic_error("HTTP/3 poll", err)),
+                Err(err) => return Error::e_because(H3_ERROR, "HTTP/3 poll", err),
             }
         }
     }
@@ -266,7 +264,7 @@ impl HttpSession {
                     }
                 }
                 Err(quiche::h3::Error::Done) => break,
-                Err(err) => return Err(Self::quic_error("HTTP/3 recv_body", err)),
+                Err(err) => return Error::e_because(H3_ERROR, "HTTP/3 recv_body", err),
             }
         }
 
@@ -316,7 +314,7 @@ impl HttpSession {
         let stream_id = self
             .h3
             .send_request(self.upstream.connection_mut().inner_mut(), &headers, end)
-            .map_err(|err| Self::quic_error("HTTP/3 send_request", err))?;
+            .map_err(|err| Error::because(H3_ERROR, "HTTP/3 send_request", err))?;
         self.stream_id = Some(stream_id);
         self.flush_quic().await
     }
@@ -333,7 +331,7 @@ impl HttpSession {
                 data.as_ref(),
                 end,
             )
-            .map_err(|err| Self::quic_error("HTTP/3 send_body", err))?;
+            .map_err(|err| Error::because(H3_ERROR, "HTTP/3 send_body", err))?;
         self.flush_quic().await
     }
 
@@ -347,7 +345,7 @@ impl HttpSession {
                     &[],
                     true,
                 )
-                .map_err(|err| Self::quic_error("HTTP/3 finish body", err))?;
+                .map_err(|err| Error::because(H3_ERROR, "HTTP/3 finish body", err))?;
             self.flush_quic().await?;
         }
         Ok(())
@@ -392,14 +390,12 @@ impl HttpSession {
                     return Ok(());
                 }
                 quiche::h3::Event::Reset(err_code) => {
-                    return Err(Error::new(
+                    return Error::e_explain(
                         H3_STREAM_RESET,
                         format!("HTTP/3 stream reset: {err_code}"),
-                    ));
+                    );
                 }
-                quiche::h3::Event::PriorityUpdate { .. }
-                | quiche::h3::Event::GoAway { .. }
-                | quiche::h3::Event::Datagram { .. } => {}
+                quiche::h3::Event::PriorityUpdate | quiche::h3::Event::GoAway => {}
             }
         }
     }
@@ -440,14 +436,12 @@ impl HttpSession {
                     return Ok(None);
                 }
                 quiche::h3::Event::Reset(err_code) => {
-                    return Err(Error::new(
+                    return Error::e_explain(
                         H3_STREAM_RESET,
                         format!("HTTP/3 stream reset: {err_code}"),
-                    ));
+                    );
                 }
-                quiche::h3::Event::GoAway { .. }
-                | quiche::h3::Event::PriorityUpdate { .. }
-                | quiche::h3::Event::Datagram { .. } => {}
+                quiche::h3::Event::GoAway | quiche::h3::Event::PriorityUpdate => {}
             }
         }
     }

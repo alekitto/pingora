@@ -28,13 +28,9 @@ use crate::server::ListenFds;
 use crate::server::ShutdownWatch;
 
 pub mod background;
-#[cfg(feature = "quic")]
 pub mod http3;
 pub mod listening;
-#[cfg(feature = "quic")]
 pub mod quic;
-
-#[cfg(feature = "quic")]
 pub use http3::{Http3Endpoint, Http3Service};
 
 /// The service interface
@@ -51,7 +47,7 @@ pub trait Service: Sync + Send {
     async fn start_service(
         &mut self,
         #[cfg(unix)] fds: Option<ListenFds>,
-        mut shutdown: ShutdownWatch,
+        shutdown: ShutdownWatch,
         listeners_per_fd: usize,
     );
 

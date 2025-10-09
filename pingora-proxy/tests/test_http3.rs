@@ -1,5 +1,3 @@
-#![cfg(feature = "quic")]
-
 mod utils;
 
 use std::time::{Duration, Instant};

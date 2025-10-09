@@ -17,20 +17,17 @@
 use crate::connectors::ConnectorOptions;
 use crate::protocols::http::client::HttpSession;
 use crate::upstreams::peer::Peer;
-#[cfg(feature = "http3")]
 use log::debug;
 use pingora_error::Result;
 use std::time::Duration;
 
 pub mod v1;
 pub mod v2;
-#[cfg(feature = "http3")]
 pub mod v3;
 
 pub struct Connector {
     h1: v1::Connector,
     h2: v2::Connector,
-    #[cfg(feature = "http3")]
     h3: v3::Connector,
 }
 
@@ -39,7 +36,6 @@ impl Connector {
         Connector {
             h1: v1::Connector::new(options.clone()),
             h2: v2::Connector::new(options.clone()),
-            #[cfg(feature = "http3")]
             h3: v3::Connector::new(options),
         }
     }
@@ -58,15 +54,16 @@ impl Connector {
         let h1_only = peer
             .get_peer_options()
             .map_or(true, |o| o.alpn.get_max_http_version() == 1);
-        #[cfg(feature = "http3")]
         if !h1_only {
             if let Some(_options) = peer.quic_transport_options() {
                 if let Some(h3) = self.h3.reused_http_session(peer).await {
-                    return Ok((HttpSession::H3(h3), true));
+                    return Ok((HttpSession::H3(Box::new(h3)), true));
                 }
 
                 match self.h3.get_http_session(peer).await {
-                    Ok((session, reused)) => return Ok((HttpSession::H3(session), reused)),
+                    Ok((session, reused)) => {
+                        return Ok((HttpSession::H3(Box::new(session)), reused))
+                    }
                     Err(err) => {
                         let min_http_version = peer
                             .get_peer_options()
@@ -118,9 +115,8 @@ impl Connector {
         match session {
             HttpSession::H1(h1) => self.h1.release_http_session(h1, peer, idle_timeout).await,
             HttpSession::H2(h2) => self.h2.release_http_session(h2, peer, idle_timeout),
-            #[cfg(feature = "http3")]
             HttpSession::H3(h3) => {
-                self.h3.release_http_session(h3, peer).await;
+                self.h3.release_http_session(*h3, peer).await;
             }
         }
     }

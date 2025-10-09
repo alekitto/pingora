@@ -72,8 +72,6 @@ impl HttpProtocol {
             HttpProtocol::Http3 => None,
         }
     }
-
-    #[cfg(feature = "quic")]
     fn quic_wire(&self) -> &'static [u8] {
         match self {
             HttpProtocol::Http1 => b"http/1.1",
@@ -215,8 +213,6 @@ impl ALPN {
             .map(|p| p.to_vec())
             .collect()
     }
-
-    #[cfg(feature = "quic")]
     pub(crate) fn to_quic_protocols(&self) -> Vec<Vec<u8>> {
         self.order.iter().map(|p| p.quic_wire().to_vec()).collect()
     }

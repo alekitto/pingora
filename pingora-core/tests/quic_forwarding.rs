@@ -1,11 +1,8 @@
-#![cfg(all(feature = "quic", feature = "http3"))]
-
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use pingora_core::protocols::quic::{
-    ClientConfig, Connection, Datagram, Endpoint, ServerConfig, TransportConfigBuilder,
-    MAX_DATAGRAM_SIZE,
+    ClientConfig, Connection, Endpoint, ServerConfig, TransportConfigBuilder, MAX_DATAGRAM_SIZE,
 };
 use rand::{rngs::OsRng, RngCore};
 use tokio::net::UdpSocket;
@@ -165,7 +162,7 @@ async fn quic_streams_and_datagrams_round_trip() {
         tokio::select! {
             server_datagram = server_endpoint.recv() => {
                 let mut datagram = server_datagram.expect("server receive");
-                let info = datagram.recv_info().clone();
+                let info = *datagram.recv_info();
                 if server_conn.is_none() {
                     let header = quiche::Header::from_slice(
                         datagram.payload_mut(),

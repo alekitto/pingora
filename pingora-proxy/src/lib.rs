@@ -231,6 +231,9 @@ impl<SV> HttpProxy<SV> {
 
                         (server_reused, error)
                     }
+                    ClientSession::H3(_) => {
+                        unimplemented!()
+                    }
                 };
                 (
                     server_reused,

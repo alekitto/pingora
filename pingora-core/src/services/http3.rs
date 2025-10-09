@@ -20,8 +20,6 @@
 //! HTTP/3 state machines minimal; follow-up patches will flesh out the
 //! protocol-specific behaviour.
 
-#![cfg(feature = "quic")]
-
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -119,7 +117,7 @@ impl Http3Endpoint {
         A: HttpServerApp + Send + Sync + 'static,
     {
         let listener = {
-            let mut builder = self.builder();
+            let builder = self.builder();
             #[cfg(unix)]
             let endpoint = builder
                 .listen(fds)
@@ -356,7 +354,7 @@ where
         &self,
         endpoint: &Endpoint,
         mut datagram: crate::protocols::quic::Datagram,
-        mut shutdown: ShutdownWatch,
+        shutdown: ShutdownWatch,
     ) {
         if datagram.payload().is_empty() {
             return;
@@ -423,7 +421,7 @@ where
 
         // Create a placeholder HTTP/3 session and hand it to the application.
         let digest = Arc::new(Digest::default());
-        let session = HttpSession::placeholder(transport, h3_conn, digest);
+        let session = HttpSession::placeholder(h3_conn, digest);
         let app = Arc::clone(&self.app);
 
         current_handle().spawn(async move {

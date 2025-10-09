@@ -1,5 +1,3 @@
-#![cfg(feature = "http3")]
-
 use std::sync::Arc;
 
 use pingora_error::{Error, ErrorType, Result};
@@ -19,11 +17,10 @@ pub struct Connector {
 
 impl Connector {
     pub fn new(_options: Option<ConnectorOptions>) -> Self {
-        let protos: [&[u8]; 1] = [quiche::h3::APPLICATION_PROTOCOL];
         let builder = TransportConfigBuilder::new()
             .unwrap_or_else(|err| panic!("failed to construct QUIC transport config: {err}"));
         let builder = builder
-            .application_protos(&protos)
+            .application_protos(quiche::h3::APPLICATION_PROTOCOL)
             .unwrap_or_else(|err| panic!("failed to configure QUIC ALPN: {err}"));
         let quic = QuicConnector::new(builder.build_client());
         let h3_config = Arc::new(
@@ -39,7 +36,7 @@ impl Connector {
         P: Peer + Send + Sync,
     {
         let mut upstream = self.quic.connect(peer).await?;
-        let mut h3_conn = quiche::h3::Connection::with_transport(
+        let h3_conn = quiche::h3::Connection::with_transport(
             upstream.connection_mut().inner_mut(),
             &self.h3_config,
         )

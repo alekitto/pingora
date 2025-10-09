@@ -1,5 +1,3 @@
-#![cfg(feature = "quic")]
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -50,7 +48,7 @@ fn build_server_config(cert: &str, key: &str) -> ServerConfig {
         .application_protos(&[b"h3"])
         .expect("set server ALPN");
     let server_config = builder.build_server().expect("build server config");
-    let _ = server_config
+    server_config
         .transport()
         .with_config_mut(|cfg| cfg.enable_dgram(true, 32, 32));
     server_config
@@ -63,7 +61,7 @@ fn build_client_config() -> ClientConfig {
         .application_protos(&[b"h3"])
         .expect("set client ALPN");
     let client_config = builder.build_client();
-    let _ = client_config
+    client_config
         .transport()
         .with_config_mut(|cfg| cfg.enable_dgram(true, 32, 32));
     client_config

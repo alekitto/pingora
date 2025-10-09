@@ -17,7 +17,6 @@
 mod digest;
 pub mod http;
 pub mod l4;
-#[cfg(feature = "quic")]
 pub mod quic;
 pub mod raw_connect;
 pub mod tls;
