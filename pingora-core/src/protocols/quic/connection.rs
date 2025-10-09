@@ -61,6 +61,11 @@ impl Connection {
         self.inner.timeout()
     }
 
+    /// Whether the handshake has completed and the connection is established.
+    pub fn is_established(&self) -> bool {
+        self.inner.is_established()
+    }
+
     /// Notify the connection that its timer has expired.
     pub fn on_timeout(&mut self) {
         self.inner.on_timeout();
