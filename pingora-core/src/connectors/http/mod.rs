@@ -68,6 +68,15 @@ impl Connector {
                 match self.h3.get_http_session(peer).await {
                     Ok((session, reused)) => return Ok((HttpSession::H3(session), reused)),
                     Err(err) => {
+                        let min_http_version = peer
+                            .get_peer_options()
+                            .map_or(1, |o| o.alpn.get_min_http_version());
+                        if min_http_version > 2 {
+                            debug!(
+                                "HTTP/3 connect failed; honoring minimum HTTP version requirement: {err}"
+                            );
+                            return Err(err);
+                        }
                         debug!("HTTP/3 connect failed, falling back: {err}");
                     }
                 }
