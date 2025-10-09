@@ -242,7 +242,10 @@ where
     ssl_conf.set_verify_hostname(false);
 
     if let Some(alpn) = alpn_override.as_ref().or(peer.get_alpn()) {
-        ssl_conf.set_alpn_protos(alpn.to_wire_preference()).unwrap();
+        let wire = alpn.to_wire_preference();
+        if !wire.is_empty() {
+            ssl_conf.set_alpn_protos(&wire).unwrap();
+        }
     }
 
     clear_error_stack();

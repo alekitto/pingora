@@ -26,6 +26,7 @@ mod tls;
 #[cfg(not(feature = "any_tls"))]
 use crate::tls::connectors as tls;
 
+use crate::protocols::tls::HttpProtocol;
 use crate::protocols::Stream;
 use crate::server::configuration::ServerConf;
 use crate::upstreams::peer::{Peer, ALPN};
@@ -37,7 +38,7 @@ use offload::OffloadRuntime;
 use parking_lot::RwLock;
 use pingora_error::{Error, ErrorType::*, OrErr, Result};
 use pingora_pool::{ConnectionMeta, ConnectionPool};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tls::TlsConnector;
@@ -290,7 +291,8 @@ impl TransportConnector {
 
     /// Tell the connector to always send h1 for ALPN for the given peer in the future.
     pub fn prefer_h1(&self, peer: &impl Peer) {
-        self.preferred_http_version.add(peer, 1);
+        self.preferred_http_version
+            .set_preference(peer, vec![HttpProtocol::Http1]);
     }
 }
 
@@ -336,7 +338,7 @@ async fn do_connect_inner<P: Peer + Send + Sync>(
 
 struct PreferredHttpVersion {
     // TODO: shard to avoid the global lock
-    versions: RwLock<HashMap<u64, u8>>, // <hash of peer, version>
+    versions: RwLock<HashMap<u64, Vec<HttpProtocol>>>, // <hash of peer, ordered versions>
 }
 
 // TODO: limit the size of this
@@ -348,18 +350,22 @@ impl PreferredHttpVersion {
         }
     }
 
-    pub fn add(&self, peer: &impl Peer, version: u8) {
+    pub fn set_preference(&self, peer: &impl Peer, preference: Vec<HttpProtocol>) {
+        if preference.is_empty() {
+            return;
+        }
         let key = peer.reuse_hash();
+        let mut order = preference;
+        let mut seen = HashSet::new();
+        order.retain(|p| seen.insert(*p));
         let mut v = self.versions.write();
-        v.insert(key, version);
+        v.insert(key, order);
     }
 
     pub fn get(&self, peer: &impl Peer) -> Option<ALPN> {
         let key = peer.reuse_hash();
         let v = self.versions.read();
-        v.get(&key)
-            .copied()
-            .map(|v| if v == 1 { ALPN::H1 } else { ALPN::H2H1 })
+        v.get(&key).cloned().map(ALPN::with_preference)
     }
 }
 
