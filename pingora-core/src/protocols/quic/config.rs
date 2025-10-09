@@ -101,8 +101,26 @@ impl TransportConfigBuilder {
 
     /// Create a builder for a specific QUIC version.
     pub fn with_version(version: u32) -> Result<Self, quiche::Error> {
+        let mut config = quiche::Config::new(version)?;
+
+        // Provide sensible transport defaults so peers can exchange both streams and
+        // datagrams immediately after the handshake completes.
+        const INITIAL_MAX_DATA: u64 = 1_000_000;
+        const INITIAL_MAX_STREAM_DATA_BIDI_LOCAL: u64 = 100_000;
+        const INITIAL_MAX_STREAM_DATA_BIDI_REMOTE: u64 = 100_000;
+        const INITIAL_MAX_STREAM_DATA_UNI: u64 = 100_000;
+        const INITIAL_MAX_STREAMS_BIDI: u64 = 16;
+        const INITIAL_MAX_STREAMS_UNI: u64 = 16;
+
+        config.set_initial_max_data(INITIAL_MAX_DATA);
+        config.set_initial_max_stream_data_bidi_local(INITIAL_MAX_STREAM_DATA_BIDI_LOCAL);
+        config.set_initial_max_stream_data_bidi_remote(INITIAL_MAX_STREAM_DATA_BIDI_REMOTE);
+        config.set_initial_max_stream_data_uni(INITIAL_MAX_STREAM_DATA_UNI);
+        config.set_initial_max_streams_bidi(INITIAL_MAX_STREAMS_BIDI);
+        config.set_initial_max_streams_uni(INITIAL_MAX_STREAMS_UNI);
+
         Ok(Self {
-            config: quiche::Config::new(version)?,
+            config,
             has_certificate: false,
             has_private_key: false,
         })
