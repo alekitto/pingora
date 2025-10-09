@@ -47,6 +47,9 @@ pub struct Service<A> {
     app_logic: Option<A>,
     #[cfg(feature = "quic")]
     http3_endpoints: Vec<Http3Endpoint>,
+    #[cfg(feature = "quic")]
+    http3_app_coercer:
+        Option<fn(Arc<A>) -> Arc<dyn crate::apps::HttpServerApp + Send + Sync + 'static>>,
     /// The number of preferred threads. `None` to follow global setting.
     pub threads: Option<usize>,
 }
@@ -60,6 +63,8 @@ impl<A> Service<A> {
             app_logic: Some(app_logic),
             #[cfg(feature = "quic")]
             http3_endpoints: Vec::new(),
+            #[cfg(feature = "quic")]
+            http3_app_coercer: None,
             threads: None,
         }
     }
@@ -73,6 +78,8 @@ impl<A> Service<A> {
             app_logic: Some(app_logic),
             #[cfg(feature = "quic")]
             http3_endpoints: Vec::new(),
+            #[cfg(feature = "quic")]
+            http3_app_coercer: None,
             threads: None,
         }
     }
@@ -235,16 +242,27 @@ where
     ) -> &mut Http3Endpoint {
         self.http3_endpoints
             .push(Http3Endpoint::new(listen_addr, server_config));
+        self.ensure_http3_app_coercer();
         self.http3_endpoints
             .last_mut()
             .expect("just pushed an HTTP/3 endpoint")
+    }
+
+    fn ensure_http3_app_coercer(&mut self) {
+        if self.http3_app_coercer.is_none() {
+            self.http3_app_coercer = Some(
+                |app: Arc<A>| -> Arc<dyn crate::apps::HttpServerApp + Send + Sync + 'static> {
+                    app
+                },
+            );
+        }
     }
 }
 
 #[async_trait]
 impl<A> ServiceTrait for Service<A>
 where
-    A: crate::apps::HttpServerApp + Send + Sync + 'static,
+    A: ServerApp + Send + Sync + 'static,
 {
     async fn start_service(
         &mut self,
@@ -294,18 +312,28 @@ where
             #[cfg(not(unix))]
             let http3_fds = ();
 
-            for endpoint in &self.http3_endpoints {
-                let mut tasks = endpoint
-                    .spawn_workers(
-                        &runtime,
-                        http3_fds.clone(),
-                        shutdown.clone(),
-                        listeners_per_fd,
-                        Arc::clone(&app_logic),
-                        &self.name,
-                    )
-                    .await;
-                handlers.append(&mut tasks);
+            if !self.http3_endpoints.is_empty() {
+                if let Some(coerce) = self.http3_app_coercer {
+                    let http3_app_logic = coerce(Arc::clone(&app_logic));
+                    for endpoint in &self.http3_endpoints {
+                        let mut tasks = endpoint
+                            .spawn_workers(
+                                &runtime,
+                                http3_fds.clone(),
+                                shutdown.clone(),
+                                listeners_per_fd,
+                                Arc::clone(&http3_app_logic),
+                                &self.name,
+                            )
+                            .await;
+                        handlers.append(&mut tasks);
+                    }
+                } else {
+                    error!(
+                        "HTTP/3 endpoints configured for service `{}` without HTTP server app",
+                        self.name
+                    );
+                }
             }
         }
 

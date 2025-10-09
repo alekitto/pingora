@@ -106,18 +106,15 @@ impl Http3Endpoint {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn spawn_workers<A>(
+    pub(crate) async fn spawn_workers(
         &self,
         runtime: &tokio::runtime::Handle,
         #[cfg_attr(not(unix), allow(unused_variables))] fds: EndpointFds,
         shutdown: ShutdownWatch,
         listeners_per_fd: usize,
-        app: Arc<A>,
+        app: Arc<dyn HttpServerApp + Send + Sync + 'static>,
         service_name: &str,
-    ) -> Vec<tokio::task::JoinHandle<()>>
-    where
-        A: HttpServerApp + Send + Sync + 'static,
-    {
+    ) -> Vec<tokio::task::JoinHandle<()>> {
         let listener = {
             let mut builder = self.builder();
             #[cfg(unix)]
@@ -273,14 +270,16 @@ where
 
         let mut tasks = Vec::new();
 
+        let http3_app_base: Arc<dyn HttpServerApp + Send + Sync + 'static> = Arc::clone(&self.app);
         for endpoint in &self.endpoints {
+            let http3_app = Arc::clone(&http3_app_base);
             let mut endpoint_tasks = endpoint
                 .spawn_workers(
                     &runtime,
                     http3_fds.clone(),
                     shutdown.clone(),
                     listeners_per_fd,
-                    Arc::clone(&self.app),
+                    http3_app,
                     &self.name,
                 )
                 .await;
@@ -303,20 +302,18 @@ where
     }
 }
 
-pub(crate) struct Http3Worker<A>
-where
-    A: HttpServerApp + Send + Sync + 'static,
-{
+pub(crate) struct Http3Worker {
     server_config: ServerConfig,
-    app: Arc<A>,
+    app: Arc<dyn HttpServerApp + Send + Sync + 'static>,
     send_queue_limit: usize,
 }
 
-impl<A> Http3Worker<A>
-where
-    A: HttpServerApp + Send + Sync + 'static,
-{
-    fn new(server_config: ServerConfig, app: Arc<A>, send_queue_limit: usize) -> Self {
+impl Http3Worker {
+    fn new(
+        server_config: ServerConfig,
+        app: Arc<dyn HttpServerApp + Send + Sync + 'static>,
+        send_queue_limit: usize,
+    ) -> Self {
         Self {
             server_config,
             app,
@@ -434,10 +431,7 @@ where
     }
 }
 
-impl<A> Http3Worker<A>
-where
-    A: HttpServerApp + Send + Sync + 'static,
-{
+impl Http3Worker {
     async fn flush_pending_datagrams(
         &self,
         endpoint: &Endpoint,
