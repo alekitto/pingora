@@ -1,6 +1,6 @@
 [package]
 name = "pingora-http"
-version = "0.7.0"
+version = "0.7.1"
 authors = ["Yuchen Wu <yuchen@cloudflare.com>"]
 license = "Apache-2.0"
 edition = "2021"
@@ -20,7 +20,7 @@ path = "src/lib.rs"
 [dependencies]
 http = { workspace = true }
 bytes = { workspace = true }
-pingora-error = { version = "0.7.0", registry = "gitea", path = "../pingora-error" }
+pingora-error = { version = "0.7.1", registry = "gitea", path = "../pingora-error" }
 
 [features]
 default = []

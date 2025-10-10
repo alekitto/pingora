@@ -1,6 +1,6 @@
 [package]
 name = "pingora-core"
-version = "0.7.0"
+version = "0.7.1"
 authors = ["Yuchen Wu <yuchen@cloudflare.com>"]
 license = "Apache-2.0"
 edition = "2021"
@@ -20,14 +20,14 @@ name = "pingora_core"
 path = "src/lib.rs"
 
 [dependencies]
-pingora-runtime = { version = "0.7.0", registry = "gitea", path = "../pingora-runtime" }
-pingora-openssl = { version = "0.7.0", registry = "gitea", path = "../pingora-openssl", optional = true }
-pingora-boringssl = { version = "0.7.0", registry = "gitea", path = "../pingora-boringssl", optional = true }
-pingora-pool = { version = "0.7.0", registry = "gitea", path = "../pingora-pool" }
-pingora-error = { version = "0.7.0", registry = "gitea", path = "../pingora-error" }
-pingora-timeout = { version = "0.7.0", registry = "gitea", path = "../pingora-timeout" }
-pingora-http = { version = "0.7.0", registry = "gitea", path = "../pingora-http" }
-pingora-rustls = { version = "0.7.0", registry = "gitea", path = "../pingora-rustls", optional = true }
+pingora-runtime = { version = "0.7.1", registry = "gitea", path = "../pingora-runtime" }
+pingora-openssl = { version = "0.7.1", registry = "gitea", path = "../pingora-openssl", optional = true }
+pingora-boringssl = { version = "0.7.1", registry = "gitea", path = "../pingora-boringssl", optional = true }
+pingora-pool = { version = "0.7.1", registry = "gitea", path = "../pingora-pool" }
+pingora-error = { version = "0.7.1", registry = "gitea", path = "../pingora-error" }
+pingora-timeout = { version = "0.7.1", registry = "gitea", path = "../pingora-timeout" }
+pingora-http = { version = "0.7.1", registry = "gitea", path = "../pingora-http" }
+pingora-rustls = { version = "0.7.1", registry = "gitea", path = "../pingora-rustls", optional = true }
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "signal"] }
 futures = "0.3"
 async-trait = { workspace = true }
