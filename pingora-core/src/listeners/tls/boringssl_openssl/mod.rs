@@ -152,7 +152,7 @@ impl Acceptor {
 
 mod alpn {
     use super::*;
-    use crate::tls::ssl::{select_next_proto, AlpnError, SslRef};
+    use crate::tls::ssl::{AlpnError, SslRef};
 
     fn valid_alpn(alpn_in: &[u8]) -> bool {
         if alpn_in.is_empty() {
@@ -162,38 +162,62 @@ mod alpn {
         true
     }
 
-    // A standard implementation provided by the SSL lib is used below
+    fn next_protocol<'a>(mut wire: &'a [u8]) -> impl Iterator<Item = &'a [u8]> {
+        std::iter::from_fn(move || {
+            if wire.is_empty() {
+                return None;
+            }
+            let len = wire[0] as usize;
+            wire = &wire[1..];
+            if len == 0 || len > wire.len() {
+                wire = &[];
+                return None;
+            }
+            let (proto, rest) = wire.split_at(len);
+            wire = rest;
+            Some(proto)
+        })
+    }
+
+    fn select_from_preference<'a>(
+        preference: &ALPN,
+        alpn_in: &'a [u8],
+        failure: AlpnError,
+    ) -> Result<&'a [u8], AlpnError> {
+        if !valid_alpn(alpn_in) {
+            return Err(failure);
+        }
+
+        for wanted in preference.preference() {
+            let wanted = match wanted {
+                HttpProtocol::Http1 => b"http/1.1".as_slice(),
+                HttpProtocol::Http2 => b"h2".as_slice(),
+                // HTTP/3 is negotiated via QUIC, not TLS.
+                HttpProtocol::Http3 => continue,
+            };
+
+            if let Some(selected) = next_protocol(alpn_in).find(|proto| *proto == wanted) {
+                return Ok(selected);
+            }
+        }
+
+        Err(failure)
+    }
+
+    // A standard implementation provided by the SSL lib would normally be used here, but the
+    // lifetime requirements of `boring::ssl::select_next_proto` conflict with the temporary
+    // preference buffers that Pingora constructs. Emulating the selection locally keeps the logic
+    // identical without leaking memory.
 
     pub fn prefer_h2<'a>(_ssl: &mut SslRef, alpn_in: &'a [u8]) -> Result<&'a [u8], AlpnError> {
-        if !valid_alpn(alpn_in) {
-            return Err(AlpnError::NOACK);
-        }
-        let pref = ALPN::h2_h1().to_wire_preference();
-        match select_next_proto(&pref, alpn_in) {
-            Some(p) => Ok(p),
-            _ => Err(AlpnError::NOACK), // unknown ALPN, just ignore it. Most clients will fallback to h1
-        }
+        select_from_preference(&ALPN::h2_h1(), alpn_in, AlpnError::NOACK)
     }
 
     pub fn h1_only<'a>(_ssl: &mut SslRef, alpn_in: &'a [u8]) -> Result<&'a [u8], AlpnError> {
-        if !valid_alpn(alpn_in) {
-            return Err(AlpnError::NOACK);
-        }
-        let pref = ALPN::h1().to_wire_preference();
-        match select_next_proto(&pref, alpn_in) {
-            Some(p) => Ok(p),
-            _ => Err(AlpnError::NOACK), // unknown ALPN, just ignore it. Most clients will fallback to h1
-        }
+        select_from_preference(&ALPN::h1(), alpn_in, AlpnError::NOACK)
     }
 
     pub fn h2_only<'a>(_ssl: &mut SslRef, alpn_in: &'a [u8]) -> Result<&'a [u8], AlpnError> {
-        if !valid_alpn(alpn_in) {
-            return Err(AlpnError::ALERT_FATAL);
-        }
-        let pref = ALPN::h2().to_wire_preference();
-        match select_next_proto(&pref, alpn_in) {
-            Some(p) => Ok(p),
-            _ => Err(AlpnError::ALERT_FATAL), // cannot agree
-        }
+        select_from_preference(&ALPN::h2(), alpn_in, AlpnError::ALERT_FATAL)
     }
 }
