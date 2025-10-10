@@ -508,7 +508,9 @@ impl<SV> HttpProxy<SV> {
                 match self.inner.response_cache_filter(session, header, ctx)? {
                     Cacheable(meta) => {
                         let mut fill_cache = true;
-                        if session.cache.bypassing() {
+                        let bypassing = session.cache.bypassing();
+
+                        if bypassing {
                             // The cache might have been bypassed because the response exceeded the
                             // maximum cacheable asset size. If that looks like the case (there
                             // is a maximum file size configured and we don't know the content
@@ -523,27 +525,11 @@ impl<SV> HttpProxy<SV> {
                                     .disable(NoCacheReason::PredictedResponseTooLarge);
                                 return Ok(());
                             }
-
-                            session.cache.response_became_cacheable();
-
-                            if session.req_header().method == Method::GET
-                                && meta.response_header().status == StatusCode::OK
-                            {
-                                self.inner.cache_miss(session, ctx);
-                            } else {
-                                // we've allowed caching on the next request,
-                                // but do not cache _this_ request if bypassed and not 200
-                                // (We didn't run upstream request cache filters to strip range or condition headers,
-                                // so this could be an uncacheable response e.g. 206 or 304 or HEAD.
-                                // Exclude all non-200/GET for simplicity, may expand allowable codes in the future.)
-                                fill_cache = false;
-                                session.cache.disable(NoCacheReason::Deferred);
-                            }
                         }
 
                         // If the Content-Length is known, and a maximum asset size has been configured
                         // on the cache, validate that the response does not exceed the maximum asset size.
-                        if session.cache.enabled() {
+                        if session.cache.enabled() || bypassing {
                             if let Some(max_file_size) = session.cache.max_file_size_bytes() {
                                 let content_length_hdr = meta.headers().get(header::CONTENT_LENGTH);
                                 if let Some(content_length) =
@@ -564,6 +550,25 @@ impl<SV> HttpProxy<SV> {
                                 // mid-transfer if the max file size is exceeded
                             }
                         }
+
+                        if bypassing && fill_cache {
+                            session.cache.response_became_cacheable();
+
+                            if session.req_header().method == Method::GET
+                                && meta.response_header().status == StatusCode::OK
+                            {
+                                self.inner.cache_miss(session, ctx);
+                            } else {
+                                // we've allowed caching on the next request,
+                                // but do not cache _this_ request if bypassed and not 200
+                                // (We didn't run upstream request cache filters to strip range or condition headers,
+                                // so this could be an uncacheable response e.g. 206 or 304 or HEAD.
+                                // Exclude all non-200/GET for simplicity, may expand allowable codes in the future.)
+                                fill_cache = false;
+                                session.cache.disable(NoCacheReason::Deferred);
+                            }
+                        }
+
                         if fill_cache {
                             let req_header = session.req_header();
                             // Update the variance in the meta via the same callback,
