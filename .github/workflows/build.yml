@@ -8,7 +8,7 @@ jobs:
       fail-fast: false
       matrix:
         # nightly, msrv, and latest stable
-        toolchain: [nightly, 1.82.0, 1.87.0]
+        toolchain: [nightly, 1.83.0, 1.87.0]
     runs-on: ubuntu-latest
     # Only run on "pull_request" event for external PRs. This is to avoid
     # duplicate builds for PRs created from internal branches.
@@ -41,10 +41,17 @@ jobs:
       - name: Run cargo test
         run: cargo test --verbose --lib --bins --tests --no-fail-fast
 
+      - name: Run cargo test (boringssl)
+        run: |
+          cargo test --verbose --lib --bins --tests --no-fail-fast --features boringssl
+
       # Need to run doc tests separately.
       # (https://github.com/rust-lang/cargo/issues/6669)
       - name: Run cargo doc test
         run: cargo test --verbose --doc
+
+      - name: Run cargo doc test (boringssl)
+        run: cargo test --verbose --doc --features boringssl
 
       - name: Run cargo clippy
         run: |

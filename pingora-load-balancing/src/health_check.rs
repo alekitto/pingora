@@ -565,6 +565,14 @@ mod test {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
+    #[allow(dead_code)]
+    fn network_tests_enabled() -> bool {
+        matches!(
+            std::env::var("PINGORA_RUN_NETWORK_TESTS"),
+            Ok(val) if val == "1"
+        )
+    }
+
     #[tokio::test]
     async fn test_tcp_check() {
         let tcp_check = TcpHealthCheck::default();
@@ -594,6 +602,9 @@ mod test {
     #[cfg(feature = "any_tls")]
     #[tokio::test]
     async fn test_tls_check() {
+        if !network_tests_enabled() {
+            return;
+        }
         let tls_check = TcpHealthCheck::new_tls("one.one.one.one");
         let backend =
             Backend::from_std_socket("1.1.1.1:443".parse().unwrap(), 1, BackendProtocol::Tcp);
@@ -604,6 +615,9 @@ mod test {
     #[cfg(feature = "any_tls")]
     #[tokio::test]
     async fn test_https_check() {
+        if !network_tests_enabled() {
+            return;
+        }
         let https_check = HttpHealthCheck::new("one.one.one.one", true);
 
         let backend =

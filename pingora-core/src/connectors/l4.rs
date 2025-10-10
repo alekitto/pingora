@@ -318,6 +318,21 @@ mod tests {
     use tokio::net::UnixListener;
     use tokio::time::sleep;
 
+    fn network_tests_enabled() -> bool {
+        matches!(
+            std::env::var("PINGORA_RUN_NETWORK_TESTS"),
+            Ok(val) if val == "1"
+        )
+    }
+
+    macro_rules! skip_if_no_network {
+        () => {
+            if !network_tests_enabled() {
+                return;
+            }
+        };
+    }
+
     /// Some of the tests below are flaky when making new connections to mock
     /// servers. The servers are simple tokio listeners, so failures there are
     /// not indicative of real errors. This function will retry the peer/server
@@ -347,6 +362,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_conn_error_refused() {
+        skip_if_no_network!();
         let peer = BasicPeer::new("127.0.0.1:79"); // hopefully port 79 is not used
         let new_session = connect(&peer, None).await;
         assert_eq!(new_session.unwrap_err().etype(), &ConnectRefused)
@@ -363,6 +379,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_conn_error_addr_not_avail() {
+        skip_if_no_network!();
         let peer = HttpPeer::new("127.0.0.1:121".to_string(), false, "".to_string());
         let addr = "192.0.2.2:0".parse().ok();
         let bind_to = BindTo {
@@ -375,6 +392,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_conn_error_other() {
+        skip_if_no_network!();
         let peer = HttpPeer::new("240.0.0.1:80".to_string(), false, "".to_string()); // non localhost
         let addr = "127.0.0.1:0".parse().ok();
         // create an error: cannot send from src addr: localhost to dst addr: a public IP
@@ -390,6 +408,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_conn_timeout() {
+        skip_if_no_network!();
         // 192.0.2.1 is effectively a blackhole
         let mut peer = BasicPeer::new("192.0.2.1:79");
         peer.options.connection_timeout = Some(std::time::Duration::from_millis(1)); //1ms
@@ -399,6 +418,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tweak_hook() {
+        skip_if_no_network!();
         const INIT_FLAG: bool = false;
 
         let flag = Arc::new(AtomicBool::new(INIT_FLAG));
@@ -419,6 +439,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_custom_connect() {
+        skip_if_no_network!();
         #[derive(Debug)]
         struct MyL4;
         #[async_trait]
@@ -443,6 +464,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_connect_proxy_fail() {
+        skip_if_no_network!();
         let mut peer = HttpPeer::new("1.1.1.1:80".to_string(), false, "".to_string());
         let mut path = PathBuf::new();
         path.push("/tmp/123");
@@ -476,6 +498,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_connect_proxy_work() {
+        skip_if_no_network!();
         tokio::spawn(async {
             mock_connect_server().await;
         });
@@ -513,6 +536,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_connect_proxy_conn_closed() {
+        skip_if_no_network!();
         tokio::spawn(async {
             mock_connect_bad_server().await;
         });

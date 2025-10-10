@@ -276,13 +276,21 @@ where
 #[tokio::test]
 async fn test_google() {
     use boring::ssl;
+    use std::io;
     use std::net::ToSocketAddrs;
     use std::pin::Pin;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
 
     let addr = "8.8.8.8:443".to_socket_addrs().unwrap().next().unwrap();
-    let stream = TcpStream::connect(&addr).await.unwrap();
+    let stream = match TcpStream::connect(&addr).await {
+        Ok(stream) => stream,
+        Err(err) if err.kind() == io::ErrorKind::NetworkUnreachable => {
+            // Some environments (e.g. CI) do not allow outbound network traffic.
+            return;
+        }
+        Err(err) => panic!("failed to connect to {}: {}", addr, err),
+    };
 
     let ssl_context = ssl::SslContext::builder(ssl::SslMethod::tls())
         .unwrap()

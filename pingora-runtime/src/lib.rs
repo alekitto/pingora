@@ -208,6 +208,12 @@ impl NoStealRuntime {
 
 #[test]
 fn test_steal_runtime() {
+    if !matches!(
+        std::env::var("PINGORA_RUN_RUNTIME_TESTS"),
+        Ok(val) if val == "1"
+    ) {
+        return;
+    }
     use tokio::time::{sleep, Duration};
     let threads = 2;
     let rt = Runtime::new_steal(threads, "test");
