@@ -18,7 +18,7 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::time::{Duration, Instant};
 
-use tinyufo::TinyUfo;
+use tinyufo::{TinyUfo, KV};
 
 mod read_through;
 pub use read_through::{Lookup, MultiLookup, RTCache};
@@ -175,8 +175,7 @@ impl<K: Hash, T: Clone + Send + Sync + 'static> MemoryCache<K, T> {
         }
         let hashed_key = self.hasher.hash_one(key);
         let node = Node::new(value, ttl);
-        // weight is always 1 for now
-        self.store.put(hashed_key, node, 1);
+        self.put_internal(hashed_key, node);
     }
 
     /// Remove a key from the cache if it exists.
@@ -199,6 +198,19 @@ impl<K: Hash, T: Clone + Send + Sync + 'static> MemoryCache<K, T> {
         let node = Node::new(value, ttl);
         // weight is always 1 for now
         self.store.force_put(hashed_key, node, 1);
+    }
+
+    fn put_internal(&self, hashed_key: u64, node: Node<T>) {
+        // weight is always 1 for now
+        let evicted = self.store.put(hashed_key, node, 1);
+        self.recover_rejected(hashed_key, evicted);
+    }
+
+    fn recover_rejected(&self, hashed_key: u64, evicted: Vec<KV<Node<T>>>) {
+        if let Some(rejected) = evicted.into_iter().find(|kv| kv.key == hashed_key) {
+            self.store
+                .force_put(hashed_key, rejected.data, rejected.weight);
+        }
     }
 
     /// This is equivalent to [MemoryCache::get] but for an arbitrary amount of keys.
@@ -331,6 +343,25 @@ mod tests {
         assert_eq!(hit, CacheStatus::Hit);
         let (res, hit) = cache.get(&3);
         assert_eq!(res.unwrap(), 6);
+        assert_eq!(hit, CacheStatus::Hit);
+    }
+
+    #[test]
+    fn test_put_recovers_rejected_item() {
+        let cache: MemoryCache<i32, i32> = MemoryCache::new(2);
+        let hashed = cache.hasher.hash_one(7);
+        let node = Node::new(8, None);
+        cache.recover_rejected(
+            hashed,
+            vec![KV {
+                key: hashed,
+                data: node,
+                weight: 1,
+            }],
+        );
+
+        let (res, hit) = cache.get(&7);
+        assert_eq!(res, Some(8));
         assert_eq!(hit, CacheStatus::Hit);
     }
 
