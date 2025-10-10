@@ -56,10 +56,12 @@ impl<SV> HttpProxy<SV> {
         }
 
         if session.cache.enabled() || session.cache.bypassing() {
-            if let Err(e) = pingora_cache::filters::upstream::request_filter(
-                &mut req,
-                session.cache.maybe_cache_meta(),
-            ) {
+            let cache_meta = if session.cache.bypassing() {
+                None
+            } else {
+                session.cache.maybe_cache_meta()
+            };
+            if let Err(e) = pingora_cache::filters::upstream::request_filter(&mut req, cache_meta) {
                 session.cache.disable(NoCacheReason::InternalError);
                 warn!("cache upstream filter error {}, disabling cache", e);
             }
