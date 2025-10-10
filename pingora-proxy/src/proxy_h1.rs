@@ -55,12 +55,8 @@ impl<SV> HttpProxy<SV> {
             // TODO: Add keepalive header for connection reuse, but this is not required per RFC
         }
 
-        if session.cache.enabled() || session.cache.bypassing() {
-            let cache_meta = if session.cache.bypassing() {
-                None
-            } else {
-                session.cache.maybe_cache_meta()
-            };
+        if session.cache.enabled() {
+            let cache_meta = session.cache.maybe_cache_meta();
             if let Err(e) = pingora_cache::filters::upstream::request_filter(&mut req, cache_meta) {
                 session.cache.disable(NoCacheReason::InternalError);
                 warn!("cache upstream filter error {}, disabling cache", e);

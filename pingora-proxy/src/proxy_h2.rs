@@ -95,16 +95,13 @@ impl<SV> HttpProxy<SV> {
         /* turn it into h2 */
         req.set_version(Version::HTTP_2);
 
-        if session.cache.enabled() || session.cache.bypassing() {
-            let cache_meta = if session.cache.bypassing() {
-                None
-            } else {
-                session.cache.maybe_cache_meta()
-            };
+        if session.cache.enabled() {
+            let cache_meta = session.cache.maybe_cache_meta();
             if let Err(e) = pingora_cache::filters::upstream::request_filter(&mut req, cache_meta) {
                 session.cache.disable(NoCacheReason::InternalError);
                 warn!("cache upstream filter error {}, disabling cache", e);
             }
+            session.mark_upstream_headers_mutated_for_cache();
         }
 
         match self
