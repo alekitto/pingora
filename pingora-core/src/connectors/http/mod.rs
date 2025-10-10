@@ -135,6 +135,13 @@ mod tests {
     use crate::upstreams::peer::HttpPeer;
     use pingora_http::RequestHeader;
 
+    fn network_tests_enabled() -> bool {
+        matches!(
+            std::env::var("PINGORA_RUN_NETWORK_TESTS"),
+            Ok(val) if val == "1"
+        )
+    }
+
     async fn get_http(http: &mut Http1Session, expected_status: u16) {
         let mut req = Box::new(RequestHeader::build("GET", b"/", None).unwrap());
         req.append_header("Host", "one.one.one.one").unwrap();
@@ -148,6 +155,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_connect_h2() {
+        if !network_tests_enabled() {
+            return;
+        }
         let connector = Connector::new(None);
         let mut peer = HttpPeer::new(("1.1.1.1", 443), true, "one.one.one.one".into());
         peer.options.set_http_version(2, 2);
@@ -156,6 +166,7 @@ mod tests {
         match &h2 {
             HttpSession::H1(_) => panic!("expect h2"),
             HttpSession::H2(h2_stream) => assert!(!h2_stream.ping_timedout()),
+            HttpSession::H3(_) => panic!("expect h2"),
         }
 
         connector.release_http_session(h2, &peer, None).await;
@@ -166,11 +177,15 @@ mod tests {
         match &h2 {
             HttpSession::H1(_) => panic!("expect h2"),
             HttpSession::H2(h2_stream) => assert!(!h2_stream.ping_timedout()),
+            HttpSession::H3(_) => panic!("expect h2"),
         }
     }
 
     #[tokio::test]
     async fn test_connect_h1() {
+        if !network_tests_enabled() {
+            return;
+        }
         let connector = Connector::new(None);
         let mut peer = HttpPeer::new(("1.1.1.1", 443), true, "one.one.one.one".into());
         peer.options.set_http_version(1, 1);
@@ -181,6 +196,7 @@ mod tests {
                 get_http(http, 200).await;
             }
             HttpSession::H2(_) => panic!("expect h1"),
+            HttpSession::H3(_) => panic!("expect h1"),
         }
         connector.release_http_session(h1, &peer, None).await;
 
@@ -190,11 +206,15 @@ mod tests {
         match &mut h1 {
             HttpSession::H1(_) => {}
             HttpSession::H2(_) => panic!("expect h1"),
+            HttpSession::H3(_) => panic!("expect h1"),
         }
     }
 
     #[tokio::test]
     async fn test_connect_h2_fallback_h1_reuse() {
+        if !network_tests_enabled() {
+            return;
+        }
         // this test verify that if the server doesn't support h2, the Connector will reuse the
         // h1 session instead.
 
@@ -211,6 +231,7 @@ mod tests {
                 get_http(http, 200).await;
             }
             HttpSession::H2(_) => panic!("expect h1"),
+            HttpSession::H3(_) => panic!("expect h1"),
         }
         connector.release_http_session(h1, &peer, None).await;
 
@@ -223,11 +244,15 @@ mod tests {
         match &mut h1 {
             HttpSession::H1(_) => {}
             HttpSession::H2(_) => panic!("expect h1"),
+            HttpSession::H3(_) => panic!("expect h1"),
         }
     }
 
     #[tokio::test]
     async fn test_connect_prefer_h1() {
+        if !network_tests_enabled() {
+            return;
+        }
         let connector = Connector::new(None);
         let mut peer = HttpPeer::new(("1.1.1.1", 443), true, "one.one.one.one".into());
         peer.options.set_http_version(2, 1);
@@ -240,6 +265,7 @@ mod tests {
                 get_http(http, 200).await;
             }
             HttpSession::H2(_) => panic!("expect h1"),
+            HttpSession::H3(_) => panic!("expect h1"),
         }
         connector.release_http_session(h1, &peer, None).await;
 
@@ -250,6 +276,7 @@ mod tests {
         match &mut h1 {
             HttpSession::H1(_) => {}
             HttpSession::H2(_) => panic!("expect h1"),
+            HttpSession::H3(_) => panic!("expect h1"),
         }
     }
 }

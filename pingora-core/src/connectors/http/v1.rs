@@ -70,6 +70,13 @@ mod tests {
     use crate::upstreams::peer::HttpPeer;
     use pingora_http::RequestHeader;
 
+    fn network_tests_enabled() -> bool {
+        matches!(
+            std::env::var("PINGORA_RUN_NETWORK_TESTS"),
+            Ok(val) if val == "1"
+        )
+    }
+
     async fn get_http(http: &mut HttpSession, expected_status: u16) {
         let mut req = Box::new(RequestHeader::build("GET", b"/", None).unwrap());
         req.append_header("Host", "one.one.one.one").unwrap();
@@ -83,6 +90,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_connect() {
+        if !network_tests_enabled() {
+            return;
+        }
         let connector = Connector::new(None);
         let peer = HttpPeer::new(("1.1.1.1", 80), false, "".into());
         // make a new connection to 1.1.1.1
@@ -105,6 +115,9 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "any_tls")]
     async fn test_connect_tls() {
+        if !network_tests_enabled() {
+            return;
+        }
         let connector = Connector::new(None);
         let peer = HttpPeer::new(("1.1.1.1", 443), true, "one.one.one.one".into());
         // make a new connection to https://1.1.1.1

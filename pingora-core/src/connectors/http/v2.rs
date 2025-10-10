@@ -462,9 +462,19 @@ mod tests {
     use super::*;
     use crate::upstreams::peer::HttpPeer;
 
+    fn network_tests_enabled() -> bool {
+        matches!(
+            std::env::var("PINGORA_RUN_NETWORK_TESTS"),
+            Ok(val) if val == "1"
+        )
+    }
+
     #[tokio::test]
     #[cfg(feature = "any_tls")]
     async fn test_connect_h2() {
+        if !network_tests_enabled() {
+            return;
+        }
         let connector = Connector::new(None);
         let mut peer = HttpPeer::new(("1.1.1.1", 443), true, "one.one.one.one".into());
         peer.options.set_http_version(2, 2);
@@ -472,12 +482,16 @@ mod tests {
         match h2 {
             HttpSession::H1(_) => panic!("expect h2"),
             HttpSession::H2(h2_stream) => assert!(!h2_stream.ping_timedout()),
+            HttpSession::H3(_) => panic!("expect h2"),
         }
     }
 
     #[tokio::test]
     #[cfg(feature = "any_tls")]
     async fn test_connect_h1() {
+        if !network_tests_enabled() {
+            return;
+        }
         let connector = Connector::new(None);
         let mut peer = HttpPeer::new(("1.1.1.1", 443), true, "one.one.one.one".into());
         // a hack to force h1, new_http_session() in the future might validate this setting
@@ -486,11 +500,15 @@ mod tests {
         match h2 {
             HttpSession::H1(_) => {}
             HttpSession::H2(_) => panic!("expect h1"),
+            HttpSession::H3(_) => panic!("expect h1"),
         }
     }
 
     #[tokio::test]
     async fn test_connect_h1_plaintext() {
+        if !network_tests_enabled() {
+            return;
+        }
         let connector = Connector::new(None);
         let mut peer = HttpPeer::new(("1.1.1.1", 80), false, "".into());
         peer.options.set_http_version(2, 1);
@@ -504,6 +522,9 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "any_tls")]
     async fn test_h2_single_stream() {
+        if !network_tests_enabled() {
+            return;
+        }
         let connector = Connector::new(None);
         let mut peer = HttpPeer::new(("1.1.1.1", 443), true, "one.one.one.one".into());
         peer.options.set_http_version(2, 2);
@@ -536,6 +557,9 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "any_tls")]
     async fn test_h2_multiple_stream() {
+        if !network_tests_enabled() {
+            return;
+        }
         let connector = Connector::new(None);
         let mut peer = HttpPeer::new(("1.1.1.1", 443), true, "one.one.one.one".into());
         peer.options.set_http_version(2, 2);

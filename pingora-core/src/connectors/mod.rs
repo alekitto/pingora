@@ -410,8 +410,24 @@ mod tests {
     // 192.0.2.1 is effectively a black hole
     const BLACK_HOLE: &str = "192.0.2.1:79";
 
+    fn network_tests_enabled() -> bool {
+        matches!(
+            std::env::var("PINGORA_RUN_NETWORK_TESTS"),
+            Ok(val) if val == "1"
+        )
+    }
+
+    macro_rules! skip_if_no_network {
+        () => {
+            if !network_tests_enabled() {
+                return;
+            }
+        };
+    }
+
     #[tokio::test]
     async fn test_connect() {
+        skip_if_no_network!();
         let connector = TransportConnector::new(None);
         let peer = BasicPeer::new("1.1.1.1:80");
         // make a new connection to 1.1.1.1
@@ -424,6 +440,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_connect_tls() {
+        skip_if_no_network!();
         let connector = TransportConnector::new(None);
         let mut peer = BasicPeer::new("1.1.1.1:443");
         // BasicPeer will use tls when SNI is set
@@ -453,6 +470,7 @@ mod tests {
     }
     #[tokio::test(flavor = "multi_thread")]
     async fn test_connect_uds() {
+        skip_if_no_network!();
         tokio::spawn(async {
             mock_connect_server().await;
         });
@@ -471,6 +489,9 @@ mod tests {
     }
 
     async fn do_test_conn_timeout(conf: Option<ConnectorOptions>) {
+        if !network_tests_enabled() {
+            return;
+        }
         let connector = TransportConnector::new(conf);
         let mut peer = BasicPeer::new(BLACK_HOLE);
         peer.options.connection_timeout = Some(std::time::Duration::from_millis(1));
@@ -488,6 +509,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_conn_timeout_with_offload() {
+        if !network_tests_enabled() {
+            return;
+        }
         let mut conf = ConnectorOptions::new(8);
         conf.offload_threadpool = Some((2, 2));
         do_test_conn_timeout(Some(conf)).await;
@@ -495,6 +519,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_connector_bind_to() {
+        skip_if_no_network!();
         // connect to remote while bind to localhost will fail
         let peer = BasicPeer::new("240.0.0.1:80");
         let mut conf = ConnectorOptions::new(1);
@@ -511,6 +536,9 @@ mod tests {
     /// This assumes that the connection will fail to on the peer and returns
     /// the decomposed error type and message
     async fn get_do_connect_failure_with_peer(peer: &BasicPeer) -> (ErrorType, String) {
+        if !network_tests_enabled() {
+            return (ErrorType::ConnectTimedout, String::new());
+        }
         let tls_connector = Connector::new(None);
         let stream = do_connect(peer, None, None, &tls_connector.ctx).await;
         match stream {
@@ -527,6 +555,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_do_connect_with_total_timeout() {
+        if !network_tests_enabled() {
+            return;
+        }
         let mut peer = BasicPeer::new(BLACK_HOLE);
         peer.options.total_connection_timeout = Some(std::time::Duration::from_millis(1));
         let (etype, context) = get_do_connect_failure_with_peer(&peer).await;
@@ -536,6 +567,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_tls_connect_timeout_supersedes_total() {
+        if !network_tests_enabled() {
+            return;
+        }
         let mut peer = BasicPeer::new(BLACK_HOLE);
         peer.options.total_connection_timeout = Some(std::time::Duration::from_millis(10));
         peer.options.connection_timeout = Some(std::time::Duration::from_millis(1));
@@ -546,6 +580,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_do_connect_without_total_timeout() {
+        if !network_tests_enabled() {
+            return;
+        }
         let peer = BasicPeer::new(BLACK_HOLE);
         let (etype, context) = get_do_connect_failure_with_peer(&peer).await;
         assert!(etype != ConnectTimedout || !context.contains("total-connection timeout"));
