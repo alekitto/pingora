@@ -95,7 +95,7 @@ impl<SV> HttpProxy<SV> {
         /* turn it into h2 */
         req.set_version(Version::HTTP_2);
 
-        if session.cache.enabled() {
+        if session.cache.enabled() || session.cache.bypassing() {
             if let Err(e) = pingora_cache::filters::upstream::request_filter(
                 &mut req,
                 session.cache.maybe_cache_meta(),
