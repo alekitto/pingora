@@ -5,6 +5,7 @@ description = "Rust port of the nginx consistent hash function"
 authors = ["Pingora Team <pingora@cloudflare.com>"]
 license = "Apache-2.0"
 edition = "2021"
+rust-version = "1.83"
 repository = "https://github.com/cloudflare/pingora"
 categories = ["caching", "algorithms"]
 keywords = ["hash", "hashing", "consistent", "pingora"]

@@ -5,6 +5,7 @@ authors = ["Yuchen Wu <yuchen@cloudflare.com>"]
 license = "Apache-2.0"
 description = "A library for rate limiting and event frequency estimation"
 edition = "2021"
+rust-version = "1.83"
 repository = "https://github.com/cloudflare/pingora"
 categories = ["algorithms"]
 keywords = ["rate-limit", "pingora"]
