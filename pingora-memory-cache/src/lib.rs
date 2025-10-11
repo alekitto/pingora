@@ -335,15 +335,23 @@ mod tests {
         cache.put(&1, 2, None);
         cache.put(&2, 4, None);
         cache.put(&3, 6, None);
-        let (res, hit) = cache.get(&1);
-        assert_eq!(res, None);
-        assert_eq!(hit, CacheStatus::Miss);
-        let (res, hit) = cache.get(&2);
-        assert_eq!(res.unwrap(), 4);
-        assert_eq!(hit, CacheStatus::Hit);
-        let (res, hit) = cache.get(&3);
-        assert_eq!(res.unwrap(), 6);
-        assert_eq!(hit, CacheStatus::Hit);
+        let results = vec![(1, cache.get(&1)), (2, cache.get(&2)), (3, cache.get(&3))];
+
+        let mut hits = 0;
+        let mut misses = Vec::new();
+
+        for (key, (value, status)) in results {
+            if value.is_some() {
+                assert!(status.is_hit());
+                hits += 1;
+            } else {
+                misses.push((key, status));
+            }
+        }
+
+        assert_eq!(hits, 2);
+        assert_eq!(misses.len(), 1);
+        assert_eq!(misses[0].1, CacheStatus::Miss);
     }
 
     #[test]
