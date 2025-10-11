@@ -1,6 +1,6 @@
 [package]
 name = "pingora-core"
-version = "0.7.1"
+version = "0.7.2"
 authors = ["Yuchen Wu <yuchen@cloudflare.com>"]
 license = "Apache-2.0"
 edition = "2021"
@@ -20,14 +20,14 @@ name = "pingora_core"
 path = "src/lib.rs"
 
 [dependencies]
-pingora-runtime = { version = "0.7.1", registry = "gitea", path = "../pingora-runtime" }
-pingora-openssl = { version = "0.7.1", registry = "gitea", path = "../pingora-openssl", optional = true }
-pingora-boringssl = { version = "0.7.1", registry = "gitea", path = "../pingora-boringssl", optional = true }
-pingora-pool = { version = "0.7.1", registry = "gitea", path = "../pingora-pool" }
-pingora-error = { version = "0.7.1", registry = "gitea", path = "../pingora-error" }
-pingora-timeout = { version = "0.7.1", registry = "gitea", path = "../pingora-timeout" }
-pingora-http = { version = "0.7.1", registry = "gitea", path = "../pingora-http" }
-pingora-rustls = { version = "0.7.1", registry = "gitea", path = "../pingora-rustls", optional = true }
+pingora-runtime = { version = "0.7.2", registry = "gitea", path = "../pingora-runtime" }
+pingora-openssl = { version = "0.7.2", registry = "gitea", path = "../pingora-openssl", optional = true }
+pingora-boringssl = { version = "0.7.2", registry = "gitea", path = "../pingora-boringssl", optional = true }
+pingora-pool = { version = "0.7.2", registry = "gitea", path = "../pingora-pool" }
+pingora-error = { version = "0.7.2", registry = "gitea", path = "../pingora-error" }
+pingora-timeout = { version = "0.7.2", registry = "gitea", path = "../pingora-timeout" }
+pingora-http = { version = "0.7.2", registry = "gitea", path = "../pingora-http" }
+pingora-rustls = { version = "0.7.2", registry = "gitea", path = "../pingora-rustls", optional = true }
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "signal"] }
 futures = "0.3"
 async-trait = { workspace = true }
@@ -37,7 +37,7 @@ http = { workspace = true }
 log = { workspace = true }
 h2 = { workspace = true }
 derivative.workspace = true
-quiche = { version = "0.24.6", default-features = false, features = ["boringssl-boring-crate"] }
+quiche = { version = "0.24.6", default-features = false }
 clap = { version = "3.2.25", features = ["derive"] }
 once_cell = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
@@ -94,7 +94,7 @@ jemallocator = "0.5"
 
 [features]
 default = []
-openssl = ["pingora-openssl", "openssl_derived"]
+openssl = ["pingora-openssl", "openssl_derived", "quiche/openssl"]
 boringssl = ["pingora-boringssl", "openssl_derived", "quiche/boringssl-boring-crate"]
 rustls = ["pingora-rustls", "any_tls", "dep:x509-parser", "ouroboros"]
 patched_http1 = ["pingora-http/patched_http1"]

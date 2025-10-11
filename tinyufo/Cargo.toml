@@ -1,6 +1,6 @@
 [package]
 name = "TinyUFO"
-version = "0.7.1"
+version = "0.7.2"
 authors = ["Yuchen Wu <yuchen@cloudflare.com>"]
 edition = "2021"
 rust-version = "1.83"
