@@ -1,6 +1,6 @@
 [package]
 name = "pingora-core"
-version = "0.7.4"
+version = "0.7.5"
 authors = ["Yuchen Wu <yuchen@cloudflare.com>"]
 license = "Apache-2.0"
 edition = "2021"
@@ -20,14 +20,14 @@ name = "pingora_core"
 path = "src/lib.rs"
 
 [dependencies]
-pingora-runtime = { version = "0.7.4", registry = "gitea", path = "../pingora-runtime" }
-pingora-openssl = { version = "0.7.4", registry = "gitea", path = "../pingora-openssl", optional = true }
-pingora-boringssl = { version = "0.7.4", registry = "gitea", path = "../pingora-boringssl", optional = true }
-pingora-pool = { version = "0.7.4", registry = "gitea", path = "../pingora-pool" }
-pingora-error = { version = "0.7.4", registry = "gitea", path = "../pingora-error" }
-pingora-timeout = { version = "0.7.4", registry = "gitea", path = "../pingora-timeout" }
-pingora-http = { version = "0.7.4", registry = "gitea", path = "../pingora-http" }
-pingora-rustls = { version = "0.7.4", registry = "gitea", path = "../pingora-rustls", optional = true }
+pingora-runtime = { version = "0.7.5", registry = "gitea", path = "../pingora-runtime" }
+pingora-openssl = { version = "0.7.5", registry = "gitea", path = "../pingora-openssl", optional = true }
+pingora-boringssl = { version = "0.7.5", registry = "gitea", path = "../pingora-boringssl", optional = true }
+pingora-pool = { version = "0.7.5", registry = "gitea", path = "../pingora-pool" }
+pingora-error = { version = "0.7.5", registry = "gitea", path = "../pingora-error" }
+pingora-timeout = { version = "0.7.5", registry = "gitea", path = "../pingora-timeout" }
+pingora-http = { version = "0.7.5", registry = "gitea", path = "../pingora-http" }
+pingora-rustls = { version = "0.7.5", registry = "gitea", path = "../pingora-rustls", optional = true }
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "signal"] }
 futures = "0.3"
 async-trait = { workspace = true }
@@ -41,7 +41,7 @@ quiche = { version = "0.24.6", default-features = false }
 clap = { version = "4.5", features = ["derive"] }
 once_cell = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
-serde_yaml = "0.8"
+serde_yaml = "0.9"
 strum = "0.26.2"
 strum_macros = "0.26.2"
 libc = "0.2.70"
