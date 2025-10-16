@@ -255,7 +255,7 @@ impl CacheControl {
         self.has_key_without_value("private")
     }
 
-    fn get_field_names(&self, key: &str) -> Option<ListValueIter> {
+    fn get_field_names(&self, key: &str) -> Option<ListValueIter<'_>> {
         if let Some(Some(value)) = self.directives.get(key) {
             Some(ListValueIter::from(value))
         } else {
@@ -264,7 +264,7 @@ impl CacheControl {
     }
 
     /// Get the values of `private=`
-    pub fn private_field_names(&self) -> Option<ListValueIter> {
+    pub fn private_field_names(&self) -> Option<ListValueIter<'_>> {
         self.get_field_names("private")
     }
 
@@ -274,7 +274,7 @@ impl CacheControl {
     }
 
     /// Get the values of `no-cache=`
-    pub fn no_cache_field_names(&self) -> Option<ListValueIter> {
+    pub fn no_cache_field_names(&self) -> Option<ListValueIter<'_>> {
         self.get_field_names("no-cache")
     }
 
